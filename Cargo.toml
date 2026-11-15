@@ -1,0 +1,22 @@
+[package]
+name = "jit-alloc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clear-cache = "0.1.3"
+hashbrown = { version = "0.17.1", default-features = false }
+roaring = { version = "0.12.0", default-features = false }
+rustc-hash = { version = "2.1.3", default-features = false }
+spin = { version = "0.12.3", default-features = false, features = [
+    "mutex",
+    "spin_mutex",
+] }
+thiserror = { version = "2.0.21", default-features = false }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", default-features = false }
+
+[features]
+default = ["std"]
+std = ["roaring/std", "rustc-hash/std", "spin/std", "thiserror/std"]
