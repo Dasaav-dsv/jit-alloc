@@ -1,50 +1,74 @@
-mod protect;
+pub mod protect;
+pub mod trap;
 mod unix;
 mod windows;
 
-use core::slice;
+use core::num::NonZero;
 
-use crate::arch::protect::JitWriteProtect;
+use crate::error::OsResult;
+
 #[cfg(unix)]
-pub use crate::arch::unix::{granularity, map_rx_rw, unmap_rw_rx};
+pub use crate::arch::unix::last_os_error;
+#[cfg(unix)]
+use crate::arch::unix::{BackingFdProvider, granularity, map_rx_rw, unmap_rw_rx};
 #[cfg(windows)]
-pub use crate::arch::windows::{granularity, map_rx_rw, unmap_rw_rx};
+pub use crate::arch::windows::last_os_error;
+#[cfg(windows)]
+use crate::arch::windows::{granularity, map_rx_rw, unmap_rw_rx};
 
-pub unsafe fn trap(rx_ptr: *const u8, rw_ptr: *mut u8, size: usize) {
-    unsafe {
-        let _write_protect = JitWriteProtect::new();
+#[derive(Debug)]
+pub struct MemmapSource {
+    #[cfg(unix)]
+    inner: BackingFdProvider,
+    #[cfg(windows)]
+    inner: (),
+    granularity: Option<NonZero<usize>>,
+}
 
-        let bytes = slice::from_raw_parts_mut(rw_ptr, size);
-        bytes.align_to_mut::<TrapCode>().1.fill(TRAP);
+impl MemmapSource {
+    pub const fn new() -> Self {
+        Self {
+            #[cfg(unix)]
+            inner: BackingFdProvider::new(),
+            #[cfg(windows)]
+            inner: (),
+            granularity: None,
+        }
+    }
 
-        clear_cache::clear_cache(rx_ptr, rx_ptr.add(size));
+    pub fn map_rx_rw(&mut self, size: usize) -> OsResult<Option<(*const u8, *mut u8)>> {
+        assert!(size.is_multiple_of(self.granularity()));
+        #[cfg(unix)]
+        unsafe {
+            map_rx_rw(size, &mut self.inner)
+        }
+        #[cfg(windows)]
+        unsafe {
+            map_rx_rw(size)
+        }
+    }
+
+    pub unsafe fn unmap_rw_rx(
+        &mut self,
+        rx_ptr: *const u8,
+        rw_ptr: *mut u8,
+        size: usize,
+    ) -> OsResult<()> {
+        assert!(size.is_multiple_of(self.granularity()));
+        unsafe { unmap_rw_rx(rx_ptr, rw_ptr, size) }
+    }
+
+    pub fn granularity(&mut self) -> usize {
+        self.granularity
+            .get_or_insert_with(|| {
+                NonZero::new(granularity()).expect("system allocation granularity should not be 0")
+            })
+            .get()
     }
 }
 
-cfg_select! {
-    any(target_arch = "x86", target_arch = "x86_64") => {
-        /// Trap instruction: int3
-        pub const TRAP: TrapCode = 0xcc;
-        pub type TrapCode = u8;
-    }
-    target_arch = "aarch64" => {
-        /// Trap instruction: brk #0xF000
-        pub const TRAP: TrapCode = TrapCode::from_be_bytes([0xd4, 0x3e, 0x00, 0x00]);
-        pub type TrapCode = u32;
-    }
-    all(target_arch = "arm", target_feature = "thumb-mode") => {
-        /// Trap instruction: bkpt #0
-        pub const TRAP: TrapCode = TrapCode::from_be_bytes([0xbe, 0x00]);
-        pub type TrapCode = u16;
-    }
-    target_arch = "arm" => {
-        /// Trap instruction: bkpt #0
-        pub const TRAP: TrapCode = TrapCode::from_be_bytes([0xe1, 0x20, 0x00, 0x70]);
-        pub type TrapCode = u32;
-    }
-    _ => {
-        /// Trap instruction zerofill fallback
-        pub const TRAP: TrapCode = 0;
-        pub type TrapCode = u32;
+impl Default for MemmapSource {
+    fn default() -> Self {
+        const { Self::new() }
     }
 }

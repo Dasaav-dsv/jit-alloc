@@ -1,6 +1,11 @@
 #![no_std]
 
-use core::{alloc::Layout, num::NonZero};
+extern crate alloc;
+
+#[cfg(feature = "std")]
+extern crate std;
+
+use core::alloc::Layout;
 
 use alloc::collections::BTreeMap;
 use hashbrown::HashMap;
@@ -8,18 +13,19 @@ use roaring::RoaringBitmap;
 use rustc_hash::FxBuildHasher;
 
 use crate::{
-    arch::{TrapCode, granularity, map_rx_rw, trap, unmap_rw_rx},
+    arch::{
+        MemmapSource,
+        trap::{TrapCode, trap_rx_rw},
+    },
     error::{AllocateError, DeallocateError, LayoutError},
 };
 
-extern crate alloc;
-
-mod arch;
+pub(crate) mod arch;
 pub mod error;
 
 #[derive(Default, Debug)]
 pub struct JitAlloc {
-    granularity: Option<NonZero<usize>>,
+    source: MemmapSource,
     shards_by_rx: BTreeMap<*const u8, Shard>,
     large_shards_by_rx: HashMap<*const u8, LargeShard, FxBuildHasher>,
 }
@@ -46,7 +52,7 @@ impl JitAlloc {
 
     pub const fn new() -> Self {
         Self {
-            granularity: None,
+            source: MemmapSource::new(),
             shards_by_rx: BTreeMap::new(),
             large_shards_by_rx: HashMap::with_hasher(FxBuildHasher),
         }
@@ -69,10 +75,10 @@ impl JitAlloc {
         let layout = self.pad_layout_large(layout)?;
 
         let size = layout.size();
-        let (rx_ptr, rw_ptr) = unsafe { map_rx_rw(size).map_err(AllocateError::OsError)? };
+        let (rx_ptr, rw_ptr) = self.source.map_rx_rw(size)?.ok_or(AllocateError::Other)?;
 
         unsafe {
-            trap(rx_ptr, rw_ptr, size);
+            trap_rx_rw(rx_ptr, rw_ptr, size);
         }
 
         self.large_shards_by_rx.insert(
@@ -131,27 +137,19 @@ impl JitAlloc {
         shard.freed = true;
 
         unsafe {
-            unmap_rw_rx(rx_ptr, shard.rw_ptr, shard.size).map_err(DeallocateError::OsError)?;
+            self.source.unmap_rw_rx(rx_ptr, shard.rw_ptr, shard.size)?;
         }
 
         Ok(())
     }
 
-    fn granularity(&mut self) -> usize {
-        self.granularity
-            .get_or_insert_with(|| {
-                NonZero::new(granularity()).expect("system allocation granularity should not be 0")
-            })
-            .get()
-    }
-
     fn pad_layout_small(&mut self, layout: Layout) -> Result<Layout, LayoutError> {
-        let granularity = self.granularity();
+        let granularity = self.source.granularity();
         pad_layout_to(layout, Self::MIN_ALIGN, granularity)
     }
 
     fn pad_layout_large(&mut self, layout: Layout) -> Result<Layout, LayoutError> {
-        let granularity = self.granularity();
+        let granularity = self.source.granularity();
         pad_layout_to(layout, granularity, granularity)
     }
 }
