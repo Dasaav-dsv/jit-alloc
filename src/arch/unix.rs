@@ -68,15 +68,23 @@ pub unsafe fn map_rx_rw(
 /// `rx_ptr` and `rw_ptr` must be both returned by a call to [`map_rx_rw`] with the same `size`.
 pub unsafe fn unmap_rw_rx(rx_ptr: *const u8, rw_ptr: *mut u8, size: usize) -> OsResult<()> {
     unsafe {
-        let mut res = os_err_if!(munmap(rx_ptr as *mut c_void, size as size_t) == -1);
+        let res = os_err_if!(munmap(rx_ptr as *mut c_void, size as size_t) == -1);
+        res.chain(unmap_rw(rx_ptr, rw_ptr, size))?;
+        Ok(())
+    }
+}
 
+/// Releases the read-write portion of a read-execute and a read-write mapping pair.
+///
+/// # Safety
+///
+/// `rx_ptr` and `rw_ptr` must be both returned by a call to [`map_rx_rw`] with the same `size`.
+pub unsafe fn unmap_rw(rx_ptr: *const u8, rw_ptr: *mut u8, size: usize) -> OsResult<()> {
+    unsafe {
         if rx_ptr != rw_ptr {
-            res = res.chain(os_err_if!(
-                munmap(rw_ptr as *mut c_void, size as size_t) == -1
-            ));
+            os_err_if!(munmap(rw_ptr as *mut c_void, size as size_t) == -1)?;
         }
-
-        res.map(|_| ())
+        Ok(())
     }
 }
 

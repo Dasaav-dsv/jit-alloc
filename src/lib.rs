@@ -5,12 +5,12 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
-use core::alloc::Layout;
+use core::{alloc::Layout, mem, num::NonZero, ptr};
 
 use alloc::collections::BTreeMap;
 use hashbrown::HashMap;
-use roaring::RoaringBitmap;
 use rustc_hash::FxBuildHasher;
+use slab::Slab;
 
 use crate::{
     arch::{
@@ -18,24 +18,39 @@ use crate::{
         trap::{TrapCode, trap_rx_rw},
     },
     error::{AllocateError, DeallocateError, LayoutError},
+    nonmax::NonMax,
 };
 
 pub(crate) mod arch;
 pub mod error;
+mod nonmax;
+
+type Size = NonZero<u16>;
+
+type NodeGen = i64;
+type NodeIndex = NonMax<u32>;
+
+type ShardOffset = NonMax<u16>;
 
 #[derive(Default, Debug)]
 pub struct JitAlloc {
     source: MemmapSource,
-    shards_by_rx: BTreeMap<*const u8, Shard>,
+
+    rw_by_rx: BTreeMap<*const u8, Shard>,
     large_shards_by_rx: HashMap<*const u8, LargeShard, FxBuildHasher>,
+
+    free_heads: BTreeMap<Size, NodeIndex>,
+    free_start: Option<NodeIndex>,
+
+    next_id: NodeGen,
+    nodes: Slab<Node>,
 }
 
 #[derive(Debug)]
 struct Shard {
     rw_ptr: *mut u8,
-    next_offset: usize,
-    allocated: RoaringBitmap,
-    used_up: RoaringBitmap,
+    nodes: HashMap<ShardOffset, NodeIndex, FxBuildHasher>,
+    freed: bool,
 }
 
 #[derive(Debug)]
@@ -43,6 +58,27 @@ struct LargeShard {
     rw_ptr: *mut u8,
     size: usize,
     freed: bool,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+struct Node {
+    gen_id: NodeGen,
+
+    next_free: Option<NodeIndex>,
+    prev_free: Option<NodeIndex>,
+
+    next: Option<NodeIndex>,
+    prev: Option<NodeIndex>,
+
+    shard_rx_ptr: *const u8,
+    shard_rw_ptr: *mut u8,
+
+    size: Option<Size>,
+    offset: Option<ShardOffset>,
+    allocated_size: Option<Size>,
+
+    _pad2e: u16,
 }
 
 impl JitAlloc {
@@ -53,8 +89,12 @@ impl JitAlloc {
     pub const fn new() -> Self {
         Self {
             source: MemmapSource::new(),
-            shards_by_rx: BTreeMap::new(),
+            rw_by_rx: BTreeMap::new(),
             large_shards_by_rx: HashMap::with_hasher(FxBuildHasher),
+            free_heads: BTreeMap::new(),
+            free_start: None,
+            next_id: 0,
+            nodes: Slab::new(),
         }
     }
 
@@ -171,4 +211,50 @@ fn pad_layout_to(
     }
 
     Ok(layout.pad_to_align())
+}
+
+impl Drop for JitAlloc {
+    fn drop(&mut self) {
+        unsafe {
+            for (rx_ptr, shard) in mem::take(&mut self.rw_by_rx) {
+                if !shard.freed {
+                    let _ = self.source.unmap_rw(rx_ptr, shard.rw_ptr, Self::SHARD_SIZE);
+                }
+            }
+
+            for (rx_ptr, shard) in mem::take(&mut self.large_shards_by_rx) {
+                if !shard.freed {
+                    let _ = self.source.unmap_rw(rx_ptr, shard.rw_ptr, shard.size);
+                }
+            }
+        }
+    }
+}
+
+unsafe impl Send for JitAlloc {}
+
+unsafe impl Sync for JitAlloc {}
+
+impl Node {
+    const fn new(gen_id: NodeGen) -> Self {
+        Self {
+            gen_id,
+            next_free: None,
+            prev_free: None,
+            next: None,
+            prev: None,
+            shard_rx_ptr: ptr::null(),
+            shard_rw_ptr: ptr::null_mut(),
+            size: None,
+            offset: None,
+            allocated_size: None,
+            _pad2e: 0,
+        }
+    }
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        const { Node::new(0) }
+    }
 }

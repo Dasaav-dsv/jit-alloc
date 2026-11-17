@@ -6,8 +6,8 @@ edition = "2024"
 [dependencies]
 clear-cache = "0.1.3"
 hashbrown = { version = "0.17.1", default-features = false }
-roaring = { version = "0.12.0", default-features = false }
 rustc-hash = { version = "2.1.3", default-features = false }
+slab = { version = "0.4.12", default-features = false }
 thiserror = { version = "2.0.21", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
@@ -18,7 +18,7 @@ ndk-sys = { version = "0.6.0", optional = true, default-features = false }
 
 [features]
 default = ["std", "shm_open", "tmp_file"]
-std = ["roaring/std", "rustc-hash/std", "thiserror/std"]
+std = ["rustc-hash/std", "slab/std", "thiserror/std"]
 asharedmem = ["dep:ndk-sys"]
 shm_open = []
 tmp_file = []

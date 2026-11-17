@@ -76,12 +76,22 @@ pub unsafe fn map_rx_rw(size: usize) -> OsResult<Option<(*const u8, *mut u8)>> {
 /// `rx_ptr` and `rw_ptr` must be both returned by a call to [`map_rx_rw`] with the same `size`.
 pub unsafe fn unmap_rw_rx(rx_ptr: *const u8, rw_ptr: *mut u8, _size: usize) -> OsResult<()> {
     unsafe {
-        let mut res = os_err_if!(UnmapViewOfFile(rx_ptr as LPCVOID) == 0);
+        let res = os_err_if!(UnmapViewOfFile(rx_ptr as LPCVOID) == 0);
+        res.chain(unmap_rw(rx_ptr, rw_ptr, _size))?;
+        Ok(())
+    }
+}
 
+/// Releases the read-write portion of a read-execute and a read-write mapping pair.
+///
+/// # Safety
+///
+/// `rx_ptr` and `rw_ptr` must be both returned by a call to [`map_rx_rw`] with the same `size`.
+pub unsafe fn unmap_rw(rx_ptr: *const u8, rw_ptr: *mut u8, _size: usize) -> OsResult<()> {
+    unsafe {
         if rx_ptr != rw_ptr {
-            res = res.chain(os_err_if!(UnmapViewOfFile(rw_ptr as LPCVOID) == 0));
+            os_err_if!(UnmapViewOfFile(rw_ptr as LPCVOID) == 0)?;
         }
-
-        res.map(|_| ())
+        Ok(())
     }
 }

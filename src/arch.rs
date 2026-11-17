@@ -10,18 +10,16 @@ use crate::error::OsResult;
 #[cfg(unix)]
 pub use crate::arch::unix::last_os_error;
 #[cfg(unix)]
-use crate::arch::unix::{BackingFdProvider, granularity, map_rx_rw, unmap_rw_rx};
+use crate::arch::unix::{BackingFdProvider, granularity, map_rx_rw, unmap_rw, unmap_rw_rx};
 #[cfg(windows)]
 pub use crate::arch::windows::last_os_error;
 #[cfg(windows)]
-use crate::arch::windows::{granularity, map_rx_rw, unmap_rw_rx};
+use crate::arch::windows::{granularity, map_rx_rw, unmap_rw, unmap_rw_rx};
 
 #[derive(Debug)]
 pub struct MemmapSource {
     #[cfg(unix)]
     inner: BackingFdProvider,
-    #[cfg(windows)]
-    inner: (),
     granularity: Option<NonZero<usize>>,
 }
 
@@ -30,8 +28,6 @@ impl MemmapSource {
         Self {
             #[cfg(unix)]
             inner: BackingFdProvider::new(),
-            #[cfg(windows)]
-            inner: (),
             granularity: None,
         }
     }
@@ -56,6 +52,16 @@ impl MemmapSource {
     ) -> OsResult<()> {
         assert!(size.is_multiple_of(self.granularity()));
         unsafe { unmap_rw_rx(rx_ptr, rw_ptr, size) }
+    }
+
+    pub unsafe fn unmap_rw(
+        &mut self,
+        rx_ptr: *const u8,
+        rw_ptr: *mut u8,
+        size: usize,
+    ) -> OsResult<()> {
+        assert!(size.is_multiple_of(self.granularity()));
+        unsafe { unmap_rw(rx_ptr, rw_ptr, size) }
     }
 
     pub fn granularity(&mut self) -> usize {
