@@ -26,6 +26,10 @@ macro_rules! impl_nonmax {
                 pub const fn get(self) -> $t {
                     self.0.get().wrapping_sub(1)
                 }
+
+                pub const fn as_usize(self) -> usize {
+                    self.get() as usize
+                }
             }
 
             impl Default for NonMax<$t> {

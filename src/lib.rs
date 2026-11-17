@@ -25,7 +25,7 @@ pub(crate) mod arch;
 pub mod error;
 mod nonmax;
 
-type Size = NonZero<u16>;
+type ASize = NonZero<u16>;
 
 type NodeGen = i64;
 type NodeIndex = NonMax<u32>;
@@ -39,7 +39,7 @@ pub struct JitAlloc {
     rw_by_rx: BTreeMap<*const u8, Shard>,
     large_shards_by_rx: HashMap<*const u8, LargeShard, FxBuildHasher>,
 
-    free_heads: BTreeMap<Size, NodeIndex>,
+    free_heads: BTreeMap<ASize, NodeIndex>,
     free_start: Option<NodeIndex>,
 
     next_id: NodeGen,
@@ -74,9 +74,9 @@ struct Node {
     shard_rx_ptr: *const u8,
     shard_rw_ptr: *mut u8,
 
-    size: Option<Size>,
+    size: Option<ASize>,
     offset: Option<ShardOffset>,
-    allocated_size: Option<Size>,
+    allocated_size: Option<ASize>,
 
     _pad2e: u16,
 }
@@ -84,7 +84,7 @@ struct Node {
 impl JitAlloc {
     const MIN_ALIGN: usize = 16;
     const SHARD_SIZE: usize = (1 << u16::BITS) * Self::MIN_ALIGN;
-    const LARGE_SIZE: usize = Self::SHARD_SIZE / 4;
+    const LARGE_SIZE: usize = Self::SHARD_SIZE / 3;
 
     pub const fn new() -> Self {
         Self {
@@ -99,7 +99,7 @@ impl JitAlloc {
     }
 
     pub fn allocate(&mut self, layout: Layout) -> Result<(*const u8, *mut u8), AllocateError> {
-        if layout.size() + layout.align() < Self::LARGE_SIZE {
+        if layout.pad_to_align().size() < Self::LARGE_SIZE {
             self.allocate_small(layout)
         } else {
             self.allocate_large(layout)
@@ -107,7 +107,7 @@ impl JitAlloc {
     }
 
     fn allocate_small(&mut self, layout: Layout) -> Result<(*const u8, *mut u8), AllocateError> {
-        let layout = self.pad_layout_small(layout)?;
+        let (layout, asize) = self.pad_layout_small(layout)?;
         todo!()
     }
 
@@ -138,7 +138,7 @@ impl JitAlloc {
         rx_ptr: *const u8,
         layout: Layout,
     ) -> Result<(), DeallocateError> {
-        if layout.size() + layout.align() < Self::LARGE_SIZE {
+        if layout.pad_to_align().size() < Self::LARGE_SIZE {
             self.deallocate_small(rx_ptr, layout)
         } else {
             self.deallocate_large(rx_ptr, layout)
@@ -150,7 +150,7 @@ impl JitAlloc {
         rx_ptr: *const u8,
         layout: Layout,
     ) -> Result<(), DeallocateError> {
-        let layout = self.pad_layout_small(layout)?;
+        let (layout, size) = self.pad_layout_small(layout)?;
         Ok(())
     }
 
@@ -183,9 +183,20 @@ impl JitAlloc {
         Ok(())
     }
 
-    fn pad_layout_small(&mut self, layout: Layout) -> Result<Layout, LayoutError> {
+    fn get_or_insert_node(&mut self, asize: ASize) -> Result<&mut Node, AllocateError> {
+        todo!()
+    }
+
+    fn pad_layout_small(&mut self, layout: Layout) -> Result<(Layout, ASize), LayoutError> {
         let granularity = self.source.granularity();
-        pad_layout_to(layout, Self::MIN_ALIGN, granularity)
+        let layout = pad_layout_to(layout, Self::MIN_ALIGN, granularity)?;
+
+        assert!(layout.size() >= Self::MIN_ALIGN, "size padded to align");
+        let non_zero = NonZero::new(layout.size() / Self::MIN_ALIGN).unwrap();
+
+        let asize = ASize::try_from(non_zero)?;
+
+        Ok((layout, asize))
     }
 
     fn pad_layout_large(&mut self, layout: Layout) -> Result<Layout, LayoutError> {
@@ -199,7 +210,7 @@ fn pad_layout_to(
     min_align: usize,
     max_align: usize,
 ) -> Result<Layout, LayoutError> {
-    let (layout, _) = layout
+    let (mut layout, _) = layout
         .align_to(min_align)?
         .extend(Layout::new::<TrapCode>())?;
 
@@ -208,6 +219,11 @@ fn pad_layout_to(
             align: layout.align(),
             max_align,
         });
+    }
+
+    if layout.align() > min_align {
+        let overhead = Layout::from_size_align(layout.align() - min_align, min_align)?;
+        (layout, _) = layout.extend(overhead)?;
     }
 
     Ok(layout.pad_to_align())
