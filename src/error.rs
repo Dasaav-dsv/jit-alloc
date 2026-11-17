@@ -54,9 +54,23 @@ pub enum DeallocateError {
 }
 
 impl OsError {
-    pub(crate) fn new(code: Option<NonZero<i32>>, args: fmt::Arguments<'_>) -> Self {
+    #[cfg(not(debug_assertions))]
+    pub(crate) fn new(code: Option<NonZero<i32>>, expr: &'static str) -> Self {
         Self {
-            inner: OsErrorInner::new(code, args),
+            inner: OsErrorInner::new(code, expr),
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn new(
+        code: Option<NonZero<i32>>,
+        args: fmt::Arguments<'_>,
+        file: &'static str,
+        line: u32,
+        column: u32,
+    ) -> Self {
+        Self {
+            inner: OsErrorInner::new(code, args, file, line, column),
         }
     }
 

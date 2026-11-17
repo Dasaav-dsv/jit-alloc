@@ -1,6 +1,6 @@
 use core::{fmt, mem, num::NonZero, slice};
 
-use alloc::{borrow::Cow, fmt::format, vec::Vec};
+use alloc::{borrow::Cow, fmt::format, string::ToString, vec::Vec};
 use thiserror::Error;
 
 pub(crate) mod err_if;
@@ -15,15 +15,43 @@ pub enum OsErrorInner {
 pub struct OsErrorSource {
     code: Option<NonZero<i32>>,
     expr: Cow<'static, str>,
+
+    #[cfg(debug_assertions)]
+    file: &'static str,
+    #[cfg(debug_assertions)]
+    line: u32,
+    #[cfg(debug_assertions)]
+    column: u32,
 }
 
 impl OsErrorInner {
-    pub fn new(code: Option<NonZero<i32>>, args: fmt::Arguments<'_>) -> Self {
+    #[cfg(not(debug_assertions))]
+    pub fn new(code: Option<NonZero<i32>>, expr: &'static str) -> Self {
+        Self::Single(OsErrorSource {
+            code,
+            expr: Cow::Borrowed(expr),
+        })
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn new(
+        code: Option<NonZero<i32>>,
+        args: fmt::Arguments<'_>,
+        file: &'static str,
+        line: u32,
+        column: u32,
+    ) -> Self {
         let expr = args
             .as_str()
             .map_or_else(|| Cow::Owned(format(args)), Cow::Borrowed);
 
-        Self::Single(OsErrorSource { code, expr })
+        Self::Single(OsErrorSource {
+            code,
+            expr,
+            file,
+            line,
+            column,
+        })
     }
 
     pub fn chain(&mut self, other: Self) {
@@ -72,10 +100,26 @@ impl fmt::Display for OsErrorInner {
 
 impl fmt::Display for OsErrorSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let expr = &*self.expr;
-        match self.code {
-            Some(code) => f.write_fmt(format_args!("in {expr} (error code {code})")),
-            None => f.write_fmt(format_args!("in {expr} (error code ?)")),
-        }
+        let code = match self.code {
+            Some(code) => Cow::Owned(code.to_string()),
+            None => Cow::Borrowed("?"),
+        };
+
+        #[cfg(not(debug_assertions))]
+        f.write_fmt(format_args!(
+            "in {expr} (error code {code})",
+            expr = self.expr,
+        ))?;
+
+        #[cfg(debug_assertions)]
+        f.write_fmt(format_args!(
+            "in {expr} (error code {code}) at {}:{}:{}",
+            self.file,
+            self.line,
+            self.column,
+            expr = self.expr,
+        ))?;
+
+        Ok(())
     }
 }

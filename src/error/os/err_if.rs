@@ -45,14 +45,23 @@ macro_rules! os_err_if {
         let res = $path0$(::$path)*($($params,)*);
         if res $($cond)+ {
             let code = $crate::arch::last_os_error();
-            Err($crate::error::OsError::new(
-                code,
-                ::core::format_args!(
-                    "{}({:?})",
-                    ::core::stringify!($fun),
-                    ($((&&&Specialize($params)).as_debug(),)*)
-                )
-            ))
+            cfg_select! {
+                debug_assertions => Err($crate::error::OsError::new(
+                    code,
+                    ::core::format_args!(
+                        "{}({:?})",
+                        ::core::stringify!($path0$(::$path)*),
+                        ($((&&&Specialize($params)).as_debug(),)*)
+                    ),
+                    file!(),
+                    line!(),
+                    column!(),
+                )),
+                _ => Err($crate::error::OsError::new(
+                    code,
+                    ::core::stringify!($path0$(::$path)*),
+                )),
+            }
         } else {
             ::core::result::Result::Ok(res)
         }
