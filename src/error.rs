@@ -39,6 +39,9 @@ pub enum AllocateError {
 
     #[error("could not allocate memory")]
     Other,
+
+    #[error("allocator is at maximum capacity")]
+    Capacity,
 }
 
 #[derive(Error, Debug)]

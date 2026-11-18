@@ -19,15 +19,17 @@ use crate::{
     },
     error::{AllocateError, DeallocateError, LayoutError},
     nonmax::NonMax,
+    priority_treap::Treap,
 };
 
 pub(crate) mod arch;
 pub mod error;
 mod nonmax;
+mod priority_treap;
 
 type ASize = NonZero<u16>;
 
-type NodeGen = i64;
+type NodeId = i64;
 type NodeIndex = NonMax<u32>;
 
 type ShardOffset = NonMax<u16>;
@@ -39,10 +41,10 @@ pub struct JitAlloc {
     rw_by_rx: BTreeMap<*const u8, Shard>,
     large_shards_by_rx: HashMap<*const u8, LargeShard, FxBuildHasher>,
 
-    free_heads: BTreeMap<ASize, NodeIndex>,
+    free_list: Treap,
     free_start: Option<NodeIndex>,
 
-    next_id: NodeGen,
+    next_id: NodeId,
     nodes: Slab<Node>,
 }
 
@@ -61,9 +63,9 @@ struct LargeShard {
 }
 
 #[derive(Debug)]
-#[repr(C)]
 struct Node {
-    gen_id: NodeGen,
+    id: NodeId,
+    shard_rx_ptr: *const u8,
 
     next_free: Option<NodeIndex>,
     prev_free: Option<NodeIndex>,
@@ -71,14 +73,9 @@ struct Node {
     next: Option<NodeIndex>,
     prev: Option<NodeIndex>,
 
-    shard_rx_ptr: *const u8,
-    shard_rw_ptr: *mut u8,
-
     size: Option<ASize>,
     offset: Option<ShardOffset>,
     allocated_size: Option<ASize>,
-
-    _pad2e: u16,
 }
 
 impl JitAlloc {
@@ -91,7 +88,7 @@ impl JitAlloc {
             source: MemmapSource::new(),
             rw_by_rx: BTreeMap::new(),
             large_shards_by_rx: HashMap::with_hasher(FxBuildHasher),
-            free_heads: BTreeMap::new(),
+            free_list: Treap::new(),
             free_start: None,
             next_id: 0,
             nodes: Slab::new(),
@@ -108,6 +105,18 @@ impl JitAlloc {
 
     fn allocate_small(&mut self, layout: Layout) -> Result<(*const u8, *mut u8), AllocateError> {
         let (layout, asize) = self.pad_layout_small(layout)?;
+
+        let first_fit = match self.free_list.first_fit(asize) {
+            Some(first_fit) => first_fit,
+            None => {
+                self.allocate_shard()?;
+
+                self.free_list
+                    .first_fit(asize)
+                    .ok_or(AllocateError::Other)?
+            }
+        };
+
         todo!()
     }
 
@@ -131,6 +140,49 @@ impl JitAlloc {
         );
 
         Ok((rx_ptr, rw_ptr))
+    }
+
+    fn allocate_shard(&mut self) -> Result<(), AllocateError> {
+        let (rx_ptr, rw_ptr) = self
+            .source
+            .map_rx_rw(Self::SHARD_SIZE)?
+            .ok_or(AllocateError::Other)?;
+
+        unsafe {
+            trap_rx_rw(rx_ptr, rw_ptr, Self::SHARD_SIZE);
+        }
+
+        let mut shard = Shard {
+            rw_ptr,
+            nodes: HashMap::with_capacity_and_hasher(2, FxBuildHasher),
+            freed: false,
+        };
+
+        let id = self.next_id();
+        let key = self.nodes.insert(Node {
+            id,
+            shard_rx_ptr: rx_ptr,
+            next_free: None,
+            prev_free: None,
+            next: None,
+            prev: None,
+            size: Some(ASize::MAX),
+            offset: Some(ShardOffset::MIN),
+            allocated_size: None,
+        });
+
+        let node_index = match NodeIndex::try_from(key) {
+            Ok(index) => index,
+            Err(_) => unsafe {
+                let _ = self.nodes.remove(key);
+                let _ = self.source.unmap_rw_rx(rx_ptr, rw_ptr, Self::SHARD_SIZE);
+                return Err(AllocateError::Capacity);
+            },
+        };
+
+        shard.nodes.insert(ShardOffset::MIN, node_index);
+
+        todo!()
     }
 
     pub unsafe fn deallocate(
@@ -183,10 +235,6 @@ impl JitAlloc {
         Ok(())
     }
 
-    fn get_or_insert_node(&mut self, asize: ASize) -> Result<&mut Node, AllocateError> {
-        todo!()
-    }
-
     fn pad_layout_small(&self, layout: Layout) -> Result<(Layout, ASize), LayoutError> {
         let granularity = self.source.granularity();
         let layout = pad_layout_to(layout, Self::MIN_ALIGN, granularity)?;
@@ -202,6 +250,12 @@ impl JitAlloc {
     fn pad_layout_large(&self, layout: Layout) -> Result<Layout, LayoutError> {
         let granularity = self.source.granularity();
         pad_layout_to(layout, granularity, granularity)
+    }
+
+    fn next_id(&mut self) -> NodeId {
+        let next_id = self.next_id;
+        self.next_id += 1;
+        next_id
     }
 }
 
@@ -250,19 +304,17 @@ impl Drop for JitAlloc {
 unsafe impl Send for JitAlloc {}
 
 impl Node {
-    const fn new(gen_id: NodeGen) -> Self {
+    const fn new(id: NodeId) -> Self {
         Self {
-            gen_id,
+            id,
             next_free: None,
             prev_free: None,
             next: None,
             prev: None,
             shard_rx_ptr: ptr::null(),
-            shard_rw_ptr: ptr::null_mut(),
             size: None,
             offset: None,
             allocated_size: None,
-            _pad2e: 0,
         }
     }
 }

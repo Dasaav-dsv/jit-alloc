@@ -16,6 +16,8 @@ macro_rules! impl_nonmax {
             }
 
             impl NonMax<$t> {
+                pub const MIN: Self = Self::new(0).unwrap();
+
                 pub const fn new(value: $t) -> Option<Self> {
                     match NonZero::new(value.wrapping_add(1)) {
                         Some(nonzero) => Some(Self(nonzero)),
@@ -35,6 +37,22 @@ macro_rules! impl_nonmax {
             impl Default for NonMax<$t> {
                 fn default() -> Self {
                     const { Self::new(0).unwrap() }
+                }
+            }
+
+            impl TryFrom<$t> for NonMax<$t> {
+                type Error = core::num::TryFromIntError;
+
+                fn try_from(value: $t) -> Result<Self, Self::Error> {
+                    value.wrapping_add(1).try_into().map(Self)
+                }
+            }
+
+            impl TryFrom<usize> for NonMax<$t> {
+                type Error = core::num::TryFromIntError;
+
+                fn try_from(value: usize) -> Result<Self, Self::Error> {
+                    <$t>::try_from(value)?.wrapping_add(1).try_into().map(Self)
                 }
             }
         )+
