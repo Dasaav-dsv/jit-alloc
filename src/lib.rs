@@ -187,7 +187,7 @@ impl JitAlloc {
         todo!()
     }
 
-    fn pad_layout_small(&mut self, layout: Layout) -> Result<(Layout, ASize), LayoutError> {
+    fn pad_layout_small(&self, layout: Layout) -> Result<(Layout, ASize), LayoutError> {
         let granularity = self.source.granularity();
         let layout = pad_layout_to(layout, Self::MIN_ALIGN, granularity)?;
 
@@ -199,7 +199,7 @@ impl JitAlloc {
         Ok((layout, asize))
     }
 
-    fn pad_layout_large(&mut self, layout: Layout) -> Result<Layout, LayoutError> {
+    fn pad_layout_large(&self, layout: Layout) -> Result<Layout, LayoutError> {
         let granularity = self.source.granularity();
         pad_layout_to(layout, granularity, granularity)
     }
@@ -248,8 +248,6 @@ impl Drop for JitAlloc {
 }
 
 unsafe impl Send for JitAlloc {}
-
-unsafe impl Sync for JitAlloc {}
 
 impl Node {
     const fn new(gen_id: NodeGen) -> Self {

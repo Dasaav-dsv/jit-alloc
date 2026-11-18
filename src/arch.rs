@@ -3,7 +3,7 @@ pub mod trap;
 mod unix;
 mod windows;
 
-use core::num::NonZero;
+use core::cell::LazyCell;
 
 use crate::error::OsResult;
 
@@ -20,7 +20,7 @@ use crate::arch::windows::{granularity, map_rx_rw, unmap_rw, unmap_rw_rx};
 pub struct MemmapSource {
     #[cfg(unix)]
     inner: BackingFdProvider,
-    granularity: Option<NonZero<usize>>,
+    granularity: LazyCell<usize>,
 }
 
 impl MemmapSource {
@@ -28,7 +28,7 @@ impl MemmapSource {
         Self {
             #[cfg(unix)]
             inner: BackingFdProvider::new(),
-            granularity: None,
+            granularity: LazyCell::new(granularity),
         }
     }
 
@@ -64,12 +64,8 @@ impl MemmapSource {
         unsafe { unmap_rw(rx_ptr, rw_ptr, size) }
     }
 
-    pub fn granularity(&mut self) -> usize {
-        self.granularity
-            .get_or_insert_with(|| {
-                NonZero::new(granularity()).expect("system allocation granularity should not be 0")
-            })
-            .get()
+    pub fn granularity(&self) -> usize {
+        *self.granularity
     }
 }
 
