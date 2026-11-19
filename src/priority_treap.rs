@@ -2,9 +2,9 @@ use core::cmp::Ordering;
 
 use slab::Slab;
 
-use crate::{ASize, NodeId, NodeIndex};
+use crate::{AlignSize, NodeId, NodeIndex};
 
-type Node = (ASize, NodeIndex, NodeId);
+type Node = (AlignSize, NodeIndex, NodeId);
 
 #[derive(Default, Debug)]
 pub struct Treap {
@@ -88,9 +88,15 @@ impl Treap {
         replaced
     }
 
-    pub fn remove(&mut self, i: NodeIndex) -> Option<Node> {
+    pub fn remove(&mut self, node: Node) -> Option<Node> {
+        let i = self.binary_search(node.0).ok()?;
+
+        if self.nodes[i.as_usize()].inner != node {
+            return None;
+        }
+
         loop {
-            let node = self.nodes.get(i.as_usize())?;
+            let node = self.nodes[i.as_usize()];
 
             let child_i = match (node.left, node.right) {
                 (Some(left), Some(right)) => {
@@ -123,17 +129,17 @@ impl Treap {
         Some(removed.inner)
     }
 
-    pub fn get(&self, size: ASize) -> Option<&Node> {
+    pub fn get(&self, size: AlignSize) -> Option<&Node> {
         let i = self.binary_search(size).ok()?;
         Some(&self.nodes[i.as_usize()].inner)
     }
 
-    pub fn get_mut(&mut self, size: ASize) -> Option<&mut Node> {
+    pub fn get_mut(&mut self, size: AlignSize) -> Option<&mut Node> {
         let i = self.binary_search(size).ok()?;
         Some(&mut self.nodes[i.as_usize()].inner)
     }
 
-    pub fn first_fit(&self, size: ASize) -> Option<&Node> {
+    pub fn first_fit(&self, size: AlignSize) -> Option<&Node> {
         let mut i = self.root?;
         loop {
             let node = &self.nodes[i.as_usize()];
@@ -145,7 +151,7 @@ impl Treap {
         }
     }
 
-    fn binary_search(&self, size: ASize) -> Result<NodeIndex, ChildIndex> {
+    fn binary_search(&self, size: AlignSize) -> Result<NodeIndex, ChildIndex> {
         let mut i = self.root.ok_or(ChildIndex::Root)?;
         loop {
             let node = &self.nodes[i.as_usize()];

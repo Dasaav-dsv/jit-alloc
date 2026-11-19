@@ -1,6 +1,6 @@
-use core::num::NonZero;
+use core::{fmt, num::NonZero};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct NonMax<T: Zeroable>(T::NonZero);
 
@@ -16,6 +16,7 @@ macro_rules! impl_nonmax {
             }
 
             impl NonMax<$t> {
+                #[allow(unused)]
                 pub const MIN: Self = Self::new(0).unwrap();
 
                 pub const fn new(value: $t) -> Option<Self> {
@@ -53,6 +54,18 @@ macro_rules! impl_nonmax {
 
                 fn try_from(value: usize) -> Result<Self, Self::Error> {
                     <$t>::try_from(value)?.wrapping_add(1).try_into().map(Self)
+                }
+            }
+
+            impl fmt::Debug for NonMax<$t> {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    fmt::Debug::fmt(&self.get(), f)
+                }
+            }
+
+            impl fmt::Display for NonMax<$t> {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    fmt::Display::fmt(&self.get(), f)
                 }
             }
         )+
