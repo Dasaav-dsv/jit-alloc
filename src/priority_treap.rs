@@ -2,19 +2,19 @@ use core::cmp::Ordering;
 
 use slab::Slab;
 
-use crate::{AlignedSize, NodeId, NodeIndex, num::Unsigned};
+use crate::{AlignedSize, NodeId, NodeIndex, SizeType};
 
-type Node<Size> = (AlignedSize<Size>, NodeIndex, NodeId);
+type Node<S> = (AlignedSize<S>, NodeIndex, NodeId);
 
 #[derive(Default, Debug)]
-pub struct Treap<Size: Unsigned> {
-    nodes: Slab<TreapNode<Size>>,
+pub struct Treap<S: SizeType> {
+    nodes: Slab<TreapNode<S>>,
     root: Option<NodeIndex>,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct TreapNode<Size: Unsigned> {
-    inner: Node<Size>,
+struct TreapNode<S: SizeType> {
+    inner: Node<S>,
 
     left: Option<NodeIndex>,
     right: Option<NodeIndex>,
@@ -27,7 +27,7 @@ enum ChildIndex {
     Node { parent: NodeIndex, is_left: bool },
 }
 
-impl<Size: Unsigned> Treap<Size> {
+impl<S: SizeType> Treap<S> {
     pub const fn new() -> Self {
         Self {
             nodes: Slab::new(),
@@ -35,7 +35,7 @@ impl<Size: Unsigned> Treap<Size> {
         }
     }
 
-    pub fn insert(&mut self, node: Node<Size>) -> Option<Node<Size>> {
+    pub fn insert(&mut self, node: Node<S>) -> Option<Node<S>> {
         let mut replaced = None;
 
         let mut i = match self.binary_search(node.0) {
@@ -88,7 +88,7 @@ impl<Size: Unsigned> Treap<Size> {
         replaced
     }
 
-    pub fn remove(&mut self, node: Node<Size>) -> Option<Node<Size>> {
+    pub fn remove(&mut self, node: Node<S>) -> Option<Node<S>> {
         let i = self.binary_search(node.0).ok()?;
 
         if self.nodes[i.as_usize()].inner != node {
@@ -129,7 +129,7 @@ impl<Size: Unsigned> Treap<Size> {
         Some(removed.inner)
     }
 
-    pub fn first_fit(&self, size: AlignedSize<Size>) -> Option<&Node<Size>> {
+    pub fn first_fit(&self, size: AlignedSize<S>) -> Option<&Node<S>> {
         let mut i = self.root?;
         loop {
             let node = &self.nodes[i.as_usize()];
@@ -141,7 +141,7 @@ impl<Size: Unsigned> Treap<Size> {
         }
     }
 
-    fn binary_search(&self, size: AlignedSize<Size>) -> Result<NodeIndex, ChildIndex> {
+    fn binary_search(&self, size: AlignedSize<S>) -> Result<NodeIndex, ChildIndex> {
         let mut i = self.root.ok_or(ChildIndex::Root)?;
         loop {
             let node = &self.nodes[i.as_usize()];
@@ -197,8 +197,8 @@ impl<Size: Unsigned> Treap<Size> {
     }
 }
 
-impl<Size: Unsigned> TreapNode<Size> {
-    const fn new(inner: Node<Size>) -> Self {
+impl<S: SizeType> TreapNode<S> {
+    const fn new(inner: Node<S>) -> Self {
         Self {
             inner,
             left: None,

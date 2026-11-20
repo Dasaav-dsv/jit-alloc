@@ -1,4 +1,4 @@
-use core::{fmt, hash::Hash, num::TryFromIntError, ops};
+use core::{fmt, hash::Hash, ops};
 
 pub mod nonmax;
 pub mod positive;
@@ -21,13 +21,13 @@ pub trait Unsigned:
     + TryFrom<u32>
     + TryFrom<u64>
     + TryFrom<u128>
-    + TryFrom<usize, Error = TryFromIntError>
+    + TryFrom<usize>
     + TryFrom<i8>
     + TryFrom<i16>
     + TryFrom<i32>
     + TryFrom<i64>
     + TryFrom<i128>
-    + TryFrom<isize, Error = TryFromIntError>
+    + TryFrom<isize>
     + TryFrom<Self::Wide>
     + fmt::Debug
     + fmt::Display
@@ -118,3 +118,12 @@ impl_unsigned! {
     u64 { wide: u128, signed: i64 },
     u128 { wide: u128, signed: i128 },
 }
+
+#[cfg(target_pointer_width = "16")]
+impl_unsigned! { usize { wide: u32, signed: isize } }
+
+#[cfg(target_pointer_width = "32")]
+impl_unsigned! { usize { wide: u64, signed: isize } }
+
+#[cfg(target_pointer_width = "64")]
+impl_unsigned! { usize { wide: u128, signed: isize } }
