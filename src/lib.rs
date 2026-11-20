@@ -38,17 +38,17 @@ type NodeId = i64;
 type NodeIndex = NonMax<u32>;
 
 #[derive(Default, Debug)]
-pub struct JitAlloc {
+pub struct JitAlloc<const GRANULARITY: usize = 1> {
     source: MemmapSource,
 
     shards_by_rx: BTreeMap<Addr, Shard>,
     large_shards_by_rx: HashMap<Addr, LargeShard, FxBuildHasher>,
 
-    nodes: NodeList,
+    nodes: NodeList<GRANULARITY>,
 }
 
 #[derive(Default, Debug)]
-struct NodeList {
+struct NodeList<const GRANULARITY: usize> {
     next_id: NodeId,
     freelist: Treap,
     nodes: Slab<Node>,
@@ -86,10 +86,13 @@ struct LargeShard {
     freed: bool,
 }
 
-impl JitAlloc {
-    const MIN_ALIGN: usize = 1;
-    const SHARD_SIZE: usize = (1 << u16::BITS) * Self::MIN_ALIGN;
-    const LARGE_SIZE: usize = Self::SHARD_SIZE / 3;
+impl<const GRANULARITY: usize> JitAlloc<GRANULARITY> {
+    const MIN_ALIGN: usize = {
+        assert!(GRANULARITY.is_power_of_two());
+        GRANULARITY
+    };
+    const SHARD_SIZE: usize = (1 << u16::BITS) * GRANULARITY;
+    const LARGE_SIZE: usize = Self::SHARD_SIZE / 2;
 
     pub const fn new() -> Self {
         Self {
@@ -329,7 +332,7 @@ fn pad_layout_to(
     Ok(layout.pad_to_align())
 }
 
-impl Drop for JitAlloc {
+impl<const GRANULARITY: usize> Drop for JitAlloc<GRANULARITY> {
     fn drop(&mut self) {
         unsafe {
             for shard in mem::take(&mut self.shards_by_rx).into_values() {
@@ -349,8 +352,11 @@ impl Drop for JitAlloc {
     }
 }
 
-impl NodeList {
-    const MIN_ALIGN: usize = JitAlloc::MIN_ALIGN;
+impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
+    const MIN_ALIGN: usize = {
+        assert!(GRANULARITY.is_power_of_two());
+        GRANULARITY
+    };
 
     const fn new() -> Self {
         Self {
@@ -403,7 +409,6 @@ impl NodeList {
                 .checked_add(align_offset)
                 .expect("offset must fit shard");
 
-            // FIXME: node.offset?
             self.adjust_node(
                 shard,
                 node_index,
@@ -719,7 +724,7 @@ unsafe impl Sync for LargeShard {}
 fn alloc() {
     use std::io::Write;
 
-    let mut alloc = JitAlloc::new();
+    let mut alloc = JitAlloc::<16>::new();
 
     let mut allocs = alloc::vec![];
 
