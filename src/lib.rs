@@ -42,17 +42,17 @@ type NodeId = i16;
 type NodeIndex = NonMax<u32>;
 
 #[derive(Debug)]
-pub struct JitAlloc<S: SizeType = u16, const GRANULARITY: usize = 1> {
+pub struct JitAlloc<S: SizeType = u16, const ALIGN: usize = 1> {
     source: MemmapSource,
 
     shards_by_rx: BTreeMap<Addr, Shard<S>>,
     large_shards_by_rx: HashMap<Addr, LargeShard, FxBuildHasher>,
 
-    nodes: NodeList<S, GRANULARITY>,
+    nodes: NodeList<S, ALIGN>,
 }
 
 #[derive(Debug)]
-struct NodeList<S: SizeType, const GRANULARITY: usize> {
+struct NodeList<S: SizeType, const ALIGN: usize> {
     next_id: NodeId,
     freelist: Treap<S>,
     nodes: Slab<Node<S>>,
@@ -90,16 +90,16 @@ struct LargeShard {
     freed: bool,
 }
 
-impl<Size: SizeType, const GRANULARITY: usize> JitAlloc<Size, GRANULARITY> {
-    pub const SHARD_SIZE: usize = (1 << Size::BITS) * GRANULARITY;
+impl<Size: SizeType, const ALIGN: usize> JitAlloc<Size, ALIGN> {
+    pub const SHARD_SIZE: usize = (1 << Size::BITS) * ALIGN;
     pub const LARGE_SIZE: usize = Self::SHARD_SIZE / 2;
     pub const MIN_ALIGN: usize = {
-        assert!(GRANULARITY.is_power_of_two());
-        GRANULARITY
+        assert!(ALIGN.is_power_of_two());
+        ALIGN
     };
 }
 
-impl<Size: SizeType, const GRANULARITY: usize> JitAlloc<Size, GRANULARITY>
+impl<Size: SizeType, const ALIGN: usize> JitAlloc<Size, ALIGN>
 where
     Size: TryFrom<usize, Error = TryFromIntError>,
 {
@@ -216,7 +216,7 @@ where
     }
 
     /// # Safety
-    /// 
+    ///
     /// TODO
     pub unsafe fn deallocate(
         &mut self,
@@ -336,13 +336,13 @@ fn pad_layout_to(
     Ok(layout.pad_to_align())
 }
 
-impl<Size: SizeType, const GRANULARITY: usize> Default for JitAlloc<Size, GRANULARITY> {
+impl<Size: SizeType, const ALIGN: usize> Default for JitAlloc<Size, ALIGN> {
     fn default() -> Self {
         const { Self::new() }
     }
 }
 
-impl<Size: SizeType, const GRANULARITY: usize> Drop for JitAlloc<Size, GRANULARITY> {
+impl<Size: SizeType, const ALIGN: usize> Drop for JitAlloc<Size, ALIGN> {
     fn drop(&mut self) {
         unsafe {
             for shard in mem::take(&mut self.shards_by_rx).into_values() {
@@ -362,10 +362,10 @@ impl<Size: SizeType, const GRANULARITY: usize> Drop for JitAlloc<Size, GRANULARI
     }
 }
 
-impl<S: SizeType, const GRANULARITY: usize> NodeList<S, GRANULARITY> {
+impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
     const MIN_ALIGN: usize = {
-        assert!(GRANULARITY.is_power_of_two());
-        GRANULARITY
+        assert!(ALIGN.is_power_of_two());
+        ALIGN
     };
 
     const fn new() -> Self {
