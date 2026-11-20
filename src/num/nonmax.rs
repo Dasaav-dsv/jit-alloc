@@ -2,12 +2,13 @@ use core::{fmt, num::NonZero};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct NonMax<T: Zeroable>(T::NonZero);
+pub struct NonMax<T: HasZero>(T::NonZero);
 
-pub trait Zeroable {
+pub trait HasZero {
     type NonZero;
 }
-impl Zeroable for u32 {
+
+impl HasZero for u32 {
     type NonZero = NonZero<u32>;
 }
 

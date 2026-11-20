@@ -5,7 +5,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
-use core::{alloc::Layout, mem, ops::Bound};
+use core::{alloc::Layout, mem, num::TryFromIntError, ops::Bound};
 
 use alloc::collections::BTreeMap;
 use hashbrown::HashMap;
@@ -18,44 +18,42 @@ use crate::{
         trap::{TrapCode, trap_rx_rw},
     },
     error::{AllocateError, DeallocateError, LayoutError},
-    nonmax::NonMax,
-    positive::Positive,
+    num::{Unsigned, nonmax::NonMax, positive::Positive},
     priority_treap::Treap,
 };
 
 pub(crate) mod arch;
 pub mod error;
-mod nonmax;
-mod positive;
+pub mod num;
 mod priority_treap;
 
 type Addr = usize;
 
-type AlignedSize = Positive<u16>;
-type AlignedOffset = u16;
+type AlignedSize<T> = Positive<T>;
+type AlignedOffset<T> = T;
 
 type NodeId = i16;
 type NodeIndex = NonMax<u32>;
 
-#[derive(Default, Debug)]
-pub struct JitAlloc<const GRANULARITY: usize = 1> {
+#[derive(Debug)]
+pub struct JitAlloc<Size: Unsigned = u16, const GRANULARITY: usize = 1> {
     source: MemmapSource,
 
-    shards_by_rx: BTreeMap<Addr, Shard>,
+    shards_by_rx: BTreeMap<Addr, Shard<Size>>,
     large_shards_by_rx: HashMap<Addr, LargeShard, FxBuildHasher>,
 
-    nodes: NodeList<GRANULARITY>,
+    nodes: NodeList<Size, GRANULARITY>,
 }
 
-#[derive(Default, Debug)]
-struct NodeList<const GRANULARITY: usize> {
+#[derive(Debug)]
+struct NodeList<Size: Unsigned, const GRANULARITY: usize> {
     next_id: NodeId,
-    freelist: Treap,
-    nodes: Slab<Node>,
+    freelist: Treap<Size>,
+    nodes: Slab<Node<Size>>,
 }
 
 #[derive(Clone, Debug)]
-struct Node {
+struct Node<Size: Unsigned> {
     id: NodeId,
     shard_rx_ptr: *const u8,
 
@@ -65,16 +63,16 @@ struct Node {
     next: Option<NodeIndex>,
     prev: Option<NodeIndex>,
 
-    size: AlignedSize,
-    offset: AlignedOffset,
-    allocated_size: Option<AlignedSize>,
+    size: AlignedSize<Size>,
+    offset: AlignedOffset<Size>,
+    allocated_size: Option<AlignedSize<Size>>,
 }
 
 #[derive(Debug)]
-struct Shard {
+struct Shard<Size: Unsigned> {
     rx_ptr: *const u8,
     rw_ptr: *mut u8,
-    nodes: HashMap<AlignedOffset, NodeIndex, FxBuildHasher>,
+    nodes: HashMap<Size, NodeIndex, FxBuildHasher>,
     freed: bool,
 }
 
@@ -86,14 +84,19 @@ struct LargeShard {
     freed: bool,
 }
 
-impl<const GRANULARITY: usize> JitAlloc<GRANULARITY> {
-    const MIN_ALIGN: usize = {
+impl<Size: Unsigned, const GRANULARITY: usize> JitAlloc<Size, GRANULARITY> {
+    pub const SHARD_SIZE: usize = (1 << Size::BITS) * GRANULARITY;
+    pub const LARGE_SIZE: usize = Self::SHARD_SIZE / 2;
+    pub const MIN_ALIGN: usize = {
         assert!(GRANULARITY.is_power_of_two());
         GRANULARITY
     };
-    const SHARD_SIZE: usize = (1 << u16::BITS) * GRANULARITY;
-    const LARGE_SIZE: usize = Self::SHARD_SIZE / 2;
+}
 
+impl<Size: Unsigned, const GRANULARITY: usize> JitAlloc<Size, GRANULARITY>
+where
+    Size: TryFrom<usize, Error = TryFromIntError>,
+{
     pub const fn new() -> Self {
         Self {
             source: MemmapSource::new(),
@@ -129,10 +132,10 @@ impl<const GRANULARITY: usize> JitAlloc<GRANULARITY> {
             self.nodes
                 .allocate_in_node(shard, first_fit_index, size, layout.align())?;
 
-        let size_bytes = size.get() as usize * Self::MIN_ALIGN;
+        let size_bytes = size.as_wide().as_usize() * Self::MIN_ALIGN;
         assert!(size_bytes >= layout.size(), "size too small");
 
-        let offset_bytes = offset as usize * Self::MIN_ALIGN;
+        let offset_bytes = offset.as_usize() * Self::MIN_ALIGN;
 
         let rx_ptr = shard.rx_ptr.wrapping_add(offset_bytes);
         assert_eq!(rx_ptr.align_offset(layout.align()), 0, "alignment failed");
@@ -238,13 +241,13 @@ impl<const GRANULARITY: usize> JitAlloc<GRANULARITY> {
             .next()
             .ok_or(DeallocateError::InvalidParameter)?;
 
-        let offset = AlignedOffset::try_from((max - *shard_addr) / Self::MIN_ALIGN)
+        let offset = AlignedOffset::<Size>::try_from((max - *shard_addr) / Self::MIN_ALIGN)
             .map_err(|_| DeallocateError::InvalidParameter)?;
 
         self.nodes.deallocate_in_shard(shard, size, offset)?;
 
-        let size_bytes = size.get() as usize * Self::MIN_ALIGN;
-        let offset_bytes = offset as usize * Self::MIN_ALIGN;
+        let size_bytes = size.as_wide().as_usize() * Self::MIN_ALIGN;
+        let offset_bytes = offset.as_usize() * Self::MIN_ALIGN;
 
         let rw_ptr = shard.rw_ptr.wrapping_add(offset_bytes);
 
@@ -284,12 +287,12 @@ impl<const GRANULARITY: usize> JitAlloc<GRANULARITY> {
         Ok(())
     }
 
-    fn pad_layout_small(&self, layout: Layout) -> Result<(Layout, AlignedSize), LayoutError> {
+    fn pad_layout_small(&self, layout: Layout) -> Result<(Layout, AlignedSize<Size>), LayoutError> {
         let granularity = self.source.granularity();
         let layout = pad_layout_to(layout, Self::MIN_ALIGN, granularity)?;
 
         assert!(layout.size() >= Self::MIN_ALIGN, "size padded to align");
-        let size = AlignedSize::try_from(layout.size() / Self::MIN_ALIGN)?;
+        let size = AlignedSize::<Size>::try_from(layout.size() / Self::MIN_ALIGN)?;
 
         Ok((layout, size))
     }
@@ -324,7 +327,13 @@ fn pad_layout_to(
     Ok(layout.pad_to_align())
 }
 
-impl<const GRANULARITY: usize> Drop for JitAlloc<GRANULARITY> {
+impl<Size: Unsigned, const GRANULARITY: usize> Default for JitAlloc<Size, GRANULARITY> {
+    fn default() -> Self {
+        const { Self::new() }
+    }
+}
+
+impl<Size: Unsigned, const GRANULARITY: usize> Drop for JitAlloc<Size, GRANULARITY> {
     fn drop(&mut self) {
         unsafe {
             for shard in mem::take(&mut self.shards_by_rx).into_values() {
@@ -344,7 +353,7 @@ impl<const GRANULARITY: usize> Drop for JitAlloc<GRANULARITY> {
     }
 }
 
-impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
+impl<Size: Unsigned, const GRANULARITY: usize> NodeList<Size, GRANULARITY> {
     const MIN_ALIGN: usize = {
         assert!(GRANULARITY.is_power_of_two());
         GRANULARITY
@@ -360,11 +369,11 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
 
     fn allocate_in_node(
         &mut self,
-        shard: &mut Shard,
+        shard: &mut Shard<Size>,
         node_index: NodeIndex,
-        size: AlignedSize,
+        size: AlignedSize<Size>,
         align: usize,
-    ) -> Result<(AlignedSize, AlignedOffset), AllocateError> {
+    ) -> Result<(AlignedSize<Size>, AlignedOffset<Size>), AllocateError> {
         let mut node = {
             let node = &mut self.nodes[node_index.as_usize()];
             if node.id < 0 {
@@ -377,7 +386,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
 
         assert!(node.allocated_size.is_none(), "node already allocated");
 
-        let offset_bytes = node.offset as usize * Self::MIN_ALIGN;
+        let offset_bytes = node.offset.as_usize() * Self::MIN_ALIGN;
 
         let rx_ptr_base = shard.rx_ptr.wrapping_add(offset_bytes);
         let rx_align_offset = rx_ptr_base.align_offset(align);
@@ -387,12 +396,12 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
 
         assert_eq!(rx_align_offset, rw_align_offset, "impossible alignment",);
 
-        let align_offset: u16 = rx_align_offset
+        let align_offset: AlignedOffset<Size> = rx_align_offset
             .div_ceil(Self::MIN_ALIGN)
             .try_into()
             .expect("alignment must fit shard");
 
-        if let Ok(prev_size) = AlignedSize::try_from(align_offset) {
+        if let Some(prev_size) = AlignedSize::<Size>::new(align_offset.as_wide()) {
             let new_offset = node
                 .offset
                 .checked_add(align_offset)
@@ -401,7 +410,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
             self.adjust_node(
                 shard,
                 node_index,
-                prev_size.get().cast_signed(),
+                prev_size.as_wide().as_signed(),
                 Some(new_offset),
             );
 
@@ -413,9 +422,8 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
 
         assert!(node.size >= size, "node is too small");
 
-        if let Some(next_size) = AlignedSize::new(node.size.get() - size.get()) {
-            let next_offset =
-                AlignedOffset::try_from(size + node.offset).expect("offset must fit shard");
+        if let Some(next_size) = node.size.checked_sub(size) {
+            let next_offset = (size + node.offset).get().expect("offset must fit shard");
 
             self.allocate_in_shard(shard, next_size, next_offset, node.next, Some(node_index))?;
 
@@ -434,9 +442,9 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
 
     fn allocate_in_shard(
         &mut self,
-        shard: &mut Shard,
-        size: AlignedSize,
-        offset: AlignedOffset,
+        shard: &mut Shard<Size>,
+        size: AlignedSize<Size>,
+        offset: AlignedOffset<Size>,
         next: Option<NodeIndex>,
         prev: Option<NodeIndex>,
     ) -> Result<NodeIndex, AllocateError> {
@@ -481,9 +489,9 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
 
     fn deallocate_in_shard(
         &mut self,
-        shard: &mut Shard,
-        size: AlignedSize,
-        offset: AlignedOffset,
+        shard: &mut Shard<Size>,
+        size: AlignedSize<Size>,
+        offset: AlignedOffset<Size>,
     ) -> Result<(), DeallocateError> {
         let node_index = *shard
             .nodes
@@ -520,14 +528,17 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
         node.size = AlignedSize::MIN;
         node.allocated_size = None;
 
-        if let Some(merge_size) = size.checked_sub(Positive::MIN) {
-            let merge_offset = node.offset.checked_add(1).expect("offset must fit shard");
+        if let Some(merge_size) = size.checked_sub(AlignedSize::MIN) {
+            let merge_offset = node
+                .offset
+                .checked_add(Unsigned::ONE)
+                .expect("offset must fit shard");
 
             if let Some(next_index) = node.next {
                 self.adjust_node(
                     shard,
                     next_index,
-                    merge_size.get().cast_signed(),
+                    merge_size.as_wide().as_signed(),
                     Some(merge_offset),
                 );
             } else {
@@ -558,7 +569,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
             shard.nodes.remove(&offset);
             self.nodes.remove(node_index.as_usize());
 
-            self.adjust_node(shard, prev_index, 1, None);
+            self.adjust_node(shard, prev_index, Size::Wide::ONE.as_signed(), None);
 
             return Ok(());
         }
@@ -572,7 +583,10 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
         Ok(())
     }
 
-    fn insert_into_freelist(&mut self, (size, node_index, id): (AlignedSize, NodeIndex, NodeId)) {
+    fn insert_into_freelist(
+        &mut self,
+        (size, node_index, id): (AlignedSize<Size>, NodeIndex, NodeId),
+    ) {
         assert_eq!(
             self.nodes[node_index.as_usize()].allocated_size,
             None,
@@ -602,7 +616,10 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
         }
     }
 
-    fn remove_from_freelist(&mut self, (size, node_index, id): (AlignedSize, NodeIndex, NodeId)) {
+    fn remove_from_freelist(
+        &mut self,
+        (size, node_index, id): (AlignedSize<Size>, NodeIndex, NodeId),
+    ) {
         let Node {
             next_free,
             prev_free,
@@ -651,10 +668,10 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
 
     fn adjust_node(
         &mut self,
-        shard: &mut Shard,
+        shard: &mut Shard<Size>,
         node_index: NodeIndex,
-        delta_size: i32,
-        new_offset: Option<AlignedOffset>,
+        delta_size: <Size::Wide as Unsigned>::Signed,
+        new_offset: Option<AlignedOffset<Size>>,
     ) {
         let node = &mut self.nodes[node_index.as_usize()];
 
@@ -667,7 +684,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
 
         node.size = node
             .size
-            .get()
+            .as_wide()
             .checked_add_signed(delta_size)
             .and_then(AlignedSize::new)
             .expect("size must fit node");
@@ -700,11 +717,11 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
     }
 }
 
-unsafe impl Send for Node {}
-unsafe impl Sync for Node {}
+unsafe impl<Size: Unsigned> Send for Node<Size> {}
+unsafe impl<Size: Unsigned> Sync for Node<Size> {}
 
-unsafe impl Send for Shard {}
-unsafe impl Sync for Shard {}
+unsafe impl<Size: Unsigned> Send for Shard<Size> {}
+unsafe impl<Size: Unsigned> Sync for Shard<Size> {}
 
 unsafe impl Send for LargeShard {}
 unsafe impl Sync for LargeShard {}

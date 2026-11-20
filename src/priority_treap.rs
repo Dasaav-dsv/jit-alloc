@@ -2,19 +2,19 @@ use core::cmp::Ordering;
 
 use slab::Slab;
 
-use crate::{AlignedSize, NodeId, NodeIndex};
+use crate::{AlignedSize, NodeId, NodeIndex, num::Unsigned};
 
-type Node = (AlignedSize, NodeIndex, NodeId);
+type Node<Size> = (AlignedSize<Size>, NodeIndex, NodeId);
 
 #[derive(Default, Debug)]
-pub struct Treap {
-    nodes: Slab<TreapNode>,
+pub struct Treap<Size: Unsigned> {
+    nodes: Slab<TreapNode<Size>>,
     root: Option<NodeIndex>,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct TreapNode {
-    inner: Node,
+struct TreapNode<Size: Unsigned> {
+    inner: Node<Size>,
 
     left: Option<NodeIndex>,
     right: Option<NodeIndex>,
@@ -27,7 +27,7 @@ enum ChildIndex {
     Node { parent: NodeIndex, is_left: bool },
 }
 
-impl Treap {
+impl<Size: Unsigned> Treap<Size> {
     pub const fn new() -> Self {
         Self {
             nodes: Slab::new(),
@@ -35,7 +35,7 @@ impl Treap {
         }
     }
 
-    pub fn insert(&mut self, node: Node) -> Option<Node> {
+    pub fn insert(&mut self, node: Node<Size>) -> Option<Node<Size>> {
         let mut replaced = None;
 
         let mut i = match self.binary_search(node.0) {
@@ -88,7 +88,7 @@ impl Treap {
         replaced
     }
 
-    pub fn remove(&mut self, node: Node) -> Option<Node> {
+    pub fn remove(&mut self, node: Node<Size>) -> Option<Node<Size>> {
         let i = self.binary_search(node.0).ok()?;
 
         if self.nodes[i.as_usize()].inner != node {
@@ -129,7 +129,7 @@ impl Treap {
         Some(removed.inner)
     }
 
-    pub fn first_fit(&self, size: AlignedSize) -> Option<&Node> {
+    pub fn first_fit(&self, size: AlignedSize<Size>) -> Option<&Node<Size>> {
         let mut i = self.root?;
         loop {
             let node = &self.nodes[i.as_usize()];
@@ -141,7 +141,7 @@ impl Treap {
         }
     }
 
-    fn binary_search(&self, size: AlignedSize) -> Result<NodeIndex, ChildIndex> {
+    fn binary_search(&self, size: AlignedSize<Size>) -> Result<NodeIndex, ChildIndex> {
         let mut i = self.root.ok_or(ChildIndex::Root)?;
         loop {
             let node = &self.nodes[i.as_usize()];
@@ -197,8 +197,8 @@ impl Treap {
     }
 }
 
-impl TreapNode {
-    const fn new(inner: Node) -> Self {
+impl<Size: Unsigned> TreapNode<Size> {
+    const fn new(inner: Node<Size>) -> Self {
         Self {
             inner,
             left: None,
