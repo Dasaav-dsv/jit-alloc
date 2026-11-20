@@ -38,12 +38,11 @@ impl<S: SizeType> Treap<S> {
     pub fn insert(&mut self, node: Node<S>) -> Option<Node<S>> {
         let mut replaced = None;
 
-        let mut i = match self.binary_search(node.0) {
+        let i = match self.binary_search(node.0) {
             Ok(replace) => {
-                let to_replace = &mut self.nodes[replace.as_usize()];
-                replaced = Some(to_replace.inner);
-                to_replace.inner = node;
-                replace
+                replaced = self.remove_at(replace);
+                assert_eq!(self.insert(node), None);
+                return replaced;
             }
             Err(ChildIndex::Root) => {
                 let root = self
@@ -76,13 +75,13 @@ impl<S: SizeType> Treap<S> {
         };
 
         while let Some(parent_i) = self.nodes[i.as_usize()].parent {
-            if self.nodes[i.as_usize()].inner.2 <= self.nodes[parent_i.as_usize()].inner.2 {
+            let node = &self.nodes[i.as_usize()];
+
+            if node.inner.2 <= self.nodes[parent_i.as_usize()].inner.2 {
                 break;
             }
 
             self.rotate(i, parent_i);
-
-            i = parent_i;
         }
 
         replaced
@@ -95,14 +94,18 @@ impl<S: SizeType> Treap<S> {
             return None;
         }
 
-        loop {
-            let node = self.nodes[i.as_usize()];
+        self.remove_at(i)
+    }
 
-            let child_i = match (node.left, node.right) {
+    pub fn remove_at(&mut self, i: NodeIndex) -> Option<Node<S>> {
+        loop {
+            let TreapNode { left, right, .. } = self.nodes[i.as_usize()];
+
+            let child_i = match (left, right) {
                 (Some(left), Some(right)) => {
-                    let left_size = self.nodes[left.as_usize()].inner.0;
-                    let right_size = self.nodes[left.as_usize()].inner.0;
-                    if left_size < right_size { left } else { right }
+                    let left_prio = self.nodes[left.as_usize()].inner.2;
+                    let right_prio = self.nodes[right.as_usize()].inner.2;
+                    if left_prio >= right_prio { left } else { right }
                 }
                 (Some(left), None) => left,
                 (None, Some(right)) => right,
@@ -170,21 +173,27 @@ impl<S: SizeType> Treap<S> {
             .get2_mut(child_i.as_usize(), parent_i.as_usize())
             .expect("treap contradiction");
 
-        node.parent = parent.parent;
+        let grandparent = parent.parent;
+
+        node.parent = grandparent;
         parent.parent = Some(child_i);
 
-        if Some(child_i) == parent.left {
+        let reparented = if Some(child_i) == parent.left {
             // rotate right
             parent.left = node.right;
-            node.right = Some(parent_i);
+            node.right.replace(parent_i)
         } else {
             // rotate left
             parent.right = node.left;
-            node.left = Some(parent_i);
+            node.left.replace(parent_i)
+        };
+
+        if let Some(reparented) = reparented {
+            self.nodes[reparented.as_usize()].parent = Some(parent_i);
         }
 
-        if let Some(grandparent_i) = node.parent {
-            let grandparent = &mut self.nodes[grandparent_i.as_usize()];
+        if let Some(grandparent) = grandparent {
+            let grandparent = &mut self.nodes[grandparent.as_usize()];
 
             if Some(parent_i) == grandparent.left {
                 grandparent.left = Some(child_i);
@@ -193,6 +202,46 @@ impl<S: SizeType> Treap<S> {
             }
         } else {
             self.root = Some(child_i);
+        }
+    }
+
+    #[allow(unused)]
+    fn assert_treap_properties(&self) {
+        for (i, node) in self.nodes.iter() {
+            let child = NodeIndex::try_from(i).unwrap();
+            if let Some(parent) = node.parent {
+                self.assert_parent_child(parent, child);
+            } else {
+                assert_eq!(self.root.unwrap().as_usize(), i);
+            }
+
+            if let Some(left_child) = node.left {
+                self.assert_parent_child(child, left_child);
+            }
+
+            if let Some(right_child) = node.right {
+                self.assert_parent_child(child, right_child);
+            }
+        }
+    }
+
+    fn assert_parent_child(&self, parent_i: NodeIndex, child_i: NodeIndex) {
+        assert_ne!(parent_i, child_i);
+
+        let child = &self.nodes[child_i.as_usize()];
+
+        assert_eq!(child.parent, Some(parent_i));
+
+        let parent = &self.nodes[parent_i.as_usize()];
+
+        assert!(child.inner.2 < parent.inner.2);
+
+        if Some(child_i) == parent.left {
+            assert!(child.inner.0 < parent.inner.0);
+        }
+
+        if Some(child_i) == parent.right {
+            assert!(child.inner.0 >= parent.inner.0);
         }
     }
 }
