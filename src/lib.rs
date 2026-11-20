@@ -542,9 +542,6 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
         } = self.nodes[node_index.as_usize()];
 
         if let Some(prev_index) = prev {
-            shard.nodes.remove(&offset);
-            self.nodes.remove(node_index.as_usize());
-
             if let Some(next_index) = next {
                 let (prev, next) = self
                     .nodes
@@ -557,6 +554,9 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
                 let prev = &mut self.nodes[prev_index.as_usize()];
                 prev.next = None;
             }
+
+            shard.nodes.remove(&offset);
+            self.nodes.remove(node_index.as_usize());
 
             self.adjust_node(shard, prev_index, 1, None);
 
