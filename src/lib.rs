@@ -708,34 +708,3 @@ unsafe impl Sync for Shard {}
 
 unsafe impl Send for LargeShard {}
 unsafe impl Sync for LargeShard {}
-
-#[test]
-fn alloc() {
-    use std::io::Write;
-
-    let mut alloc = JitAlloc::<16>::new();
-
-    let mut allocs = alloc::vec![];
-
-    let mut out = std::fs::File::options()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open("out.txt")
-        .unwrap();
-
-    for j in 3..=5 {
-        for i in 0..1024 {
-            let (rx, _) = alloc.allocate(Layout::new::<[u128; 18]>()).unwrap();
-            if i % j == 0 {
-                allocs.push(rx);
-            }
-        }
-        for rx in allocs.drain(..) {
-            unsafe {
-                alloc.deallocate(rx, Layout::new::<[u128; 18]>()).unwrap();
-            }
-        }
-        std::write!(&mut out, "==={j}===\n\n\n{alloc:#?}").unwrap();
-    }
-}
