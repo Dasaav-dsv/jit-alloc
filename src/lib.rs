@@ -130,23 +130,15 @@ impl<const GRANULARITY: usize> JitAlloc<GRANULARITY> {
                 .allocate_in_node(shard, first_fit_index, size, layout.align())?;
 
         let size_bytes = size.get() as usize * Self::MIN_ALIGN;
-        assert!(size_bytes >= layout.size(), "bug: size too small");
+        assert!(size_bytes >= layout.size(), "size too small");
 
         let offset_bytes = offset as usize * Self::MIN_ALIGN;
 
         let rx_ptr = shard.rx_ptr.wrapping_add(offset_bytes);
-        assert_eq!(
-            rx_ptr.align_offset(layout.align()),
-            0,
-            "bug: alignment failed"
-        );
+        assert_eq!(rx_ptr.align_offset(layout.align()), 0, "alignment failed");
 
         let rw_ptr = shard.rw_ptr.wrapping_add(offset_bytes);
-        assert_eq!(
-            rw_ptr.align_offset(layout.align()),
-            0,
-            "bug: alignment failed"
-        );
+        assert_eq!(rw_ptr.align_offset(layout.align()), 0, "alignment failed");
 
         unsafe {
             trap_rx_rw(rx_ptr, rw_ptr, size_bytes);
@@ -383,7 +375,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
 
         let mut original = (node.size, node_index, node.id);
 
-        assert!(node.allocated_size.is_none(), "bug: node already allocated");
+        assert!(node.allocated_size.is_none(), "node already allocated");
 
         let offset_bytes = node.offset as usize * Self::MIN_ALIGN;
 
@@ -393,10 +385,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
         let rw_ptr_base = shard.rw_ptr.wrapping_add(offset_bytes);
         let rw_align_offset = rw_ptr_base.align_offset(align);
 
-        assert_eq!(
-            rx_align_offset, rw_align_offset,
-            "bug: impossible alignment",
-        );
+        assert_eq!(rx_align_offset, rw_align_offset, "impossible alignment",);
 
         let align_offset: u16 = rx_align_offset
             .div_ceil(Self::MIN_ALIGN)
@@ -422,7 +411,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
             original = (node.size, node_index, node.id);
         }
 
-        assert!(node.size >= size, "bug: node is too small");
+        assert!(node.size >= size, "node is too small");
 
         if let Some(next_size) = AlignedSize::new(node.size.get() - size.get()) {
             let next_offset =
@@ -513,7 +502,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
         // Fixup if an offset adjustment was skipped due to this node being allocated.
         if offset != node.offset {
             let removed = shard.nodes.remove(&offset);
-            assert_eq!(removed, Some(node_index), "bug: wrong shard or index");
+            assert_eq!(removed, Some(node_index), "wrong shard or index");
 
             shard
                 .nodes
@@ -521,10 +510,10 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
                 .expect("can't overwrite another node");
         }
 
-        assert!(node.id >= 0, "bug: allocated node has negative priority");
+        assert!(node.id >= 0, "allocated node has negative priority");
 
-        assert_eq!(node.next_free, None, "bug: allocated node in freelist");
-        assert_eq!(node.prev_free, None, "bug: allocated node in freelist");
+        assert_eq!(node.next_free, None, "allocated node in freelist");
+        assert_eq!(node.prev_free, None, "allocated node in freelist");
 
         let size = node.size;
 
@@ -587,7 +576,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
         assert_eq!(
             self.nodes[node_index.as_usize()].allocated_size,
             None,
-            "bug: tried to insert an allocated node"
+            "tried to insert an allocated node",
         );
 
         let Some((_, p_index, _)) = self.freelist.insert((size, node_index, id)) else {
@@ -624,7 +613,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
             && let Some(prev_index) = prev_free
         {
             let prev = &self.nodes[prev_index.as_usize()];
-            assert_eq!(prev.allocated_size, None, "bug: prev must be free");
+            assert_eq!(prev.allocated_size, None, "prev must be free");
 
             self.freelist.insert((prev.size, prev_index, prev.id));
         }
@@ -649,13 +638,13 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
                 next.prev_free = Some(prev_index);
                 prev.next_free = Some(next_index);
 
-                assert_ne!(next.next_free, Some(node_index), "bug: broken link");
-                assert_ne!(prev.prev_free, Some(node_index), "bug: broken link");
+                assert_ne!(next.next_free, Some(node_index), "broken link");
+                assert_ne!(prev.prev_free, Some(node_index), "broken link");
             }
         } else {
             assert!(
                 next_free.is_none() && prev_free.is_none(),
-                "bug: broken list links",
+                "broken list links",
             );
         }
     }
@@ -687,7 +676,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
             // Skip offset adjustment if the node is allocated.
             if node.allocated_size.is_none() {
                 let removed = shard.nodes.remove(&node.offset);
-                assert_eq!(removed, Some(node_index), "bug: wrong shard or index");
+                assert_eq!(removed, Some(node_index), "wrong shard or index");
 
                 shard
                     .nodes
