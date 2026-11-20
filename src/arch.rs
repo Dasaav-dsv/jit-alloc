@@ -3,8 +3,6 @@ pub mod trap;
 mod unix;
 mod windows;
 
-use core::cell::LazyCell;
-
 use crate::error::OsResult;
 
 #[cfg(unix)]
@@ -20,7 +18,12 @@ use crate::arch::windows::{granularity, map_rx_rw, unmap_rw, unmap_rw_rx};
 pub struct MemmapSource {
     #[cfg(unix)]
     inner: BackingFdProvider,
-    granularity: LazyCell<usize>,
+
+    #[cfg(feature = "std")]
+    granularity: std::sync::LazyLock<usize>,
+
+    #[cfg(not(feature = "std"))]
+    granularity: core::cell::LazyCell<usize>,
 }
 
 impl MemmapSource {
@@ -28,6 +31,11 @@ impl MemmapSource {
         Self {
             #[cfg(unix)]
             inner: BackingFdProvider::new(),
+
+            #[cfg(feature = "std")]
+            granularity: std::sync::LazyLock::new(granularity),
+
+            #[cfg(not(feature = "std"))]
             granularity: LazyCell::new(granularity),
         }
     }

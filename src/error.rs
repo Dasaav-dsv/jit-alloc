@@ -57,6 +57,9 @@ pub enum DeallocateError {
 
     #[error(transparent)]
     Os(#[from] OsError),
+
+    #[error("could not deallocate memory")]
+    Other,
 }
 
 impl OsError {
