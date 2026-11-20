@@ -22,3 +22,6 @@ std = ["rustc-hash/std", "slab/std", "thiserror/std"]
 asharedmem = ["dep:ndk-sys"]
 shm_open = []
 tmp_file = []
+
+[dev-dependencies]
+rand = "0.10.4"

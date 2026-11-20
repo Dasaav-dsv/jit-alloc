@@ -122,9 +122,9 @@ where
     }
 
     fn allocate_small(&mut self, layout: Layout) -> Result<(*const u8, *mut u8), AllocateError> {
-        let (layout, size) = self.pad_layout_small(layout)?;
+        let (layout, size, max_size) = self.pad_layout_small(layout)?;
 
-        let first_fit_index = match self.nodes.freelist.first_fit(size) {
+        let first_fit_index = match self.nodes.freelist.first_fit(max_size) {
             Some((_, node_index, _)) => *node_index,
             None => self.allocate_shard()?,
         };
@@ -240,7 +240,7 @@ where
         rx_ptr: *const u8,
         layout: Layout,
     ) -> Result<(), DeallocateError> {
-        let (_, size) = self.pad_layout_small(layout)?;
+        let (_, size, _) = self.pad_layout_small(layout)?;
 
         let min = rx_ptr.addr().saturating_sub(Self::SHARD_SIZE);
         let max = rx_ptr.addr();
@@ -297,19 +297,22 @@ where
         Ok(())
     }
 
-    fn pad_layout_small(&self, layout: Layout) -> Result<(Layout, AlignedSize<S>), LayoutError> {
+    fn pad_layout_small(
+        &self,
+        layout: Layout,
+    ) -> Result<(Layout, AlignedSize<S>, AlignedSize<S>), LayoutError> {
         let granularity = self.source.granularity();
-        let layout = pad_layout_to(layout, ALIGN, granularity)?;
+        let (layout, max_size) = pad_layout_to(layout, ALIGN, granularity)?;
 
-        assert!(layout.size() >= ALIGN, "size padded to align");
-        let size = AlignedSize::<S>::try_from(layout.size() / ALIGN)?;
+        let size = AlignedSize::<S>::try_from(layout.size().div_ceil(ALIGN))?;
+        let max_size = AlignedSize::<S>::try_from(max_size.div_ceil(ALIGN))?;
 
-        Ok((layout, size))
+        Ok((layout, size, max_size))
     }
 
     fn pad_layout_large(&self, layout: Layout) -> Result<Layout, LayoutError> {
         let granularity = self.source.granularity();
-        pad_layout_to(layout, granularity, granularity)
+        Ok(pad_layout_to(layout, granularity, granularity)?.0)
     }
 }
 
@@ -317,10 +320,11 @@ fn pad_layout_to(
     layout: Layout,
     min_align: usize,
     max_align: usize,
-) -> Result<Layout, LayoutError> {
-    let (mut layout, _) = layout
-        .align_to(min_align)?
-        .extend(Layout::new::<TrapCode>())?;
+) -> Result<(Layout, usize), LayoutError> {
+    let layout = layout
+        .extend(Layout::new::<TrapCode>())?
+        .0
+        .align_to(min_align)?;
 
     if layout.align() > max_align {
         return Err(LayoutError::Overaligned {
@@ -329,12 +333,14 @@ fn pad_layout_to(
         });
     }
 
-    if layout.align() > min_align {
-        let overhead = Layout::from_size_align(layout.align() - min_align, min_align)?;
-        (layout, _) = layout.extend(overhead)?;
+    if layout.align() <= min_align {
+        return Ok((layout, layout.size()));
     }
 
-    Ok(layout.pad_to_align())
+    let overhead = Layout::from_size_align(layout.align() - min_align, min_align)?;
+    let overhead_layout = layout.extend(overhead)?.0.pad_to_align();
+
+    Ok((layout, overhead_layout.size()))
 }
 
 impl<S: SizeType, const ALIGN: usize> Default for JitAlloc<S, ALIGN> {
@@ -723,3 +729,32 @@ unsafe impl<S: SizeType> Sync for Shard<S> {}
 unsafe impl Send for LargeShard {}
 unsafe impl Sync for LargeShard {}
 
+#[cfg(test)]
+#[test]
+fn test() {
+    use alloc::vec;
+
+    use rand::RngExt;
+
+    let mut rng = rand::rng();
+
+    let mut alloc = JitAlloc::<u16, 16>::new();
+
+    let mut allocs = vec![None; 1000];
+
+    for _ in 0..100000 {
+        let i = rng.random_range(0..1000);
+
+        match allocs[i].take() {
+            None => {
+                let size = rng.random_range(1..=10000);
+                let align = 1 << rng.random_range(0..8);
+                let layout = Layout::from_size_align(size, align).unwrap();
+                allocs[i] = Some((alloc.allocate(layout).unwrap().0, layout));
+            }
+            Some((rx_ptr, layout)) => unsafe {
+                alloc.deallocate(rx_ptr, layout).unwrap();
+            },
+        }
+    }
+}
