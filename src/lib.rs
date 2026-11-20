@@ -383,14 +383,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         size: AlignedSize<S>,
         align: usize,
     ) -> Result<(AlignedSize<S>, AlignedOffset<S>), AllocateError> {
-        let mut node = {
-            let node = &mut self.nodes[node_index.as_usize()];
-            if node.id < 0 {
-                node.id = !node.id;
-            }
-            node.clone()
-        };
-
+        let mut node = self.nodes[node_index.as_usize()].clone();
         let mut original = (node.size, node_index, node.id);
 
         assert!(node.allocated_size.is_none(), "node already allocated");
@@ -435,16 +428,18 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             let next_offset = (size + node.offset).get().expect("offset must fit shard");
 
             self.allocate_in_shard(shard, next_size, next_offset, node.next, Some(node_index))?;
-
-            let updated = &mut self.nodes[node_index.as_usize()];
-            updated.size = size;
-
-            node = updated.clone();
         }
 
         self.remove_from_freelist(original);
 
-        self.nodes[node_index.as_usize()].allocated_size = Some(size);
+        let node = &mut self.nodes[node_index.as_usize()];
+
+        node.size = size;
+        node.allocated_size = Some(size);
+
+        if node.id < 0 {
+            node.id = !node.id;
+        }
 
         Ok((size, node.offset))
     }
