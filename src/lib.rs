@@ -75,10 +75,10 @@ struct Node<S: SizeType> {
 }
 
 #[derive(Debug)]
-struct Shard<Size: SizeType> {
+struct Shard<S: SizeType> {
     rx_ptr: *const u8,
     rw_ptr: *mut u8,
-    nodes: HashMap<Size, NodeIndex, FxBuildHasher>,
+    nodes: HashMap<AlignedOffset<S>, NodeIndex, FxBuildHasher>,
     freed: bool,
 }
 
@@ -90,8 +90,8 @@ struct LargeShard {
     freed: bool,
 }
 
-impl<Size: SizeType, const ALIGN: usize> JitAlloc<Size, ALIGN> {
-    pub const SHARD_SIZE: usize = (1 << Size::BITS) * ALIGN;
+impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
+    pub const SHARD_SIZE: usize = (1 << S::BITS) * ALIGN;
     pub const LARGE_SIZE: usize = Self::SHARD_SIZE / 2;
     pub const MIN_ALIGN: usize = {
         assert!(ALIGN.is_power_of_two());
@@ -99,11 +99,12 @@ impl<Size: SizeType, const ALIGN: usize> JitAlloc<Size, ALIGN> {
     };
 }
 
-impl<Size: SizeType, const ALIGN: usize> JitAlloc<Size, ALIGN>
+impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN>
 where
-    Size: TryFrom<usize, Error = TryFromIntError>,
+    S: TryFrom<usize, Error = TryFromIntError>,
 {
     pub const fn new() -> Self {
+        let _ = Self::MIN_ALIGN;
         Self {
             source: MemmapSource::new(),
             shards_by_rx: BTreeMap::new(),
@@ -138,10 +139,10 @@ where
             self.nodes
                 .allocate_in_node(shard, first_fit_index, size, layout.align())?;
 
-        let size_bytes = size.as_wide().as_usize() * Self::MIN_ALIGN;
+        let size_bytes = size.as_wide().as_usize() * ALIGN;
         assert!(size_bytes >= layout.size(), "size too small");
 
-        let offset_bytes = offset.as_usize() * Self::MIN_ALIGN;
+        let offset_bytes = offset.as_usize() * ALIGN;
 
         let rx_ptr = shard.rx_ptr.wrapping_add(offset_bytes);
         assert_eq!(rx_ptr.align_offset(layout.align()), 0, "alignment failed");
@@ -223,7 +224,7 @@ where
         rx_ptr: *const u8,
         layout: Layout,
     ) -> Result<(), DeallocateError> {
-        if rx_ptr.align_offset(Self::MIN_ALIGN) != 0 {
+        if rx_ptr.align_offset(ALIGN) != 0 {
             return Err(DeallocateError::InvalidParameter);
         }
 
@@ -250,13 +251,13 @@ where
             .next()
             .ok_or(DeallocateError::InvalidParameter)?;
 
-        let offset = AlignedOffset::<Size>::try_from((max - *shard_addr) / Self::MIN_ALIGN)
+        let offset = AlignedOffset::<S>::try_from((max - *shard_addr) / ALIGN)
             .map_err(|_| DeallocateError::InvalidParameter)?;
 
         self.nodes.deallocate_in_shard(shard, size, offset)?;
 
-        let size_bytes = size.as_wide().as_usize() * Self::MIN_ALIGN;
-        let offset_bytes = offset.as_usize() * Self::MIN_ALIGN;
+        let size_bytes = size.as_wide().as_usize() * ALIGN;
+        let offset_bytes = offset.as_usize() * ALIGN;
 
         let rw_ptr = shard.rw_ptr.wrapping_add(offset_bytes);
 
@@ -296,12 +297,12 @@ where
         Ok(())
     }
 
-    fn pad_layout_small(&self, layout: Layout) -> Result<(Layout, AlignedSize<Size>), LayoutError> {
+    fn pad_layout_small(&self, layout: Layout) -> Result<(Layout, AlignedSize<S>), LayoutError> {
         let granularity = self.source.granularity();
-        let layout = pad_layout_to(layout, Self::MIN_ALIGN, granularity)?;
+        let layout = pad_layout_to(layout, ALIGN, granularity)?;
 
-        assert!(layout.size() >= Self::MIN_ALIGN, "size padded to align");
-        let size = AlignedSize::<Size>::try_from(layout.size() / Self::MIN_ALIGN)?;
+        assert!(layout.size() >= ALIGN, "size padded to align");
+        let size = AlignedSize::<S>::try_from(layout.size() / ALIGN)?;
 
         Ok((layout, size))
     }
@@ -336,13 +337,13 @@ fn pad_layout_to(
     Ok(layout.pad_to_align())
 }
 
-impl<Size: SizeType, const ALIGN: usize> Default for JitAlloc<Size, ALIGN> {
+impl<S: SizeType, const ALIGN: usize> Default for JitAlloc<S, ALIGN> {
     fn default() -> Self {
         const { Self::new() }
     }
 }
 
-impl<Size: SizeType, const ALIGN: usize> Drop for JitAlloc<Size, ALIGN> {
+impl<S: SizeType, const ALIGN: usize> Drop for JitAlloc<S, ALIGN> {
     fn drop(&mut self) {
         unsafe {
             for shard in mem::take(&mut self.shards_by_rx).into_values() {
@@ -363,11 +364,6 @@ impl<Size: SizeType, const ALIGN: usize> Drop for JitAlloc<Size, ALIGN> {
 }
 
 impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
-    const MIN_ALIGN: usize = {
-        assert!(ALIGN.is_power_of_two());
-        ALIGN
-    };
-
     const fn new() -> Self {
         Self {
             next_id: 0,
@@ -388,7 +384,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
         assert!(node.allocated_size.is_none(), "node already allocated");
 
-        let offset_bytes = node.offset.as_usize() * Self::MIN_ALIGN;
+        let offset_bytes = node.offset.as_usize() * ALIGN;
 
         let rx_ptr_base = shard.rx_ptr.wrapping_add(offset_bytes);
         let rx_align_offset = rx_ptr_base.align_offset(align);
@@ -399,7 +395,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         assert_eq!(rx_align_offset, rw_align_offset, "impossible alignment",);
 
         let align_offset: AlignedOffset<S> = rx_align_offset
-            .div_ceil(Self::MIN_ALIGN)
+            .div_ceil(ALIGN)
             .try_into()
             .expect("alignment must fit shard");
 
@@ -726,3 +722,4 @@ unsafe impl<S: SizeType> Sync for Shard<S> {}
 
 unsafe impl Send for LargeShard {}
 unsafe impl Sync for LargeShard {}
+
