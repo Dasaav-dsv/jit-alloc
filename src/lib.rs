@@ -34,7 +34,7 @@ type Addr = usize;
 type AlignedSize = Positive<u16>;
 type AlignedOffset = u16;
 
-type NodeId = i64;
+type NodeId = i16;
 type NodeIndex = NonMax<u32>;
 
 #[derive(Default, Debug)]
@@ -706,7 +706,7 @@ impl<const GRANULARITY: usize> NodeList<GRANULARITY> {
 
     fn next_id(&mut self) -> NodeId {
         let next_id = self.next_id;
-        self.next_id += 1;
+        self.next_id = next_id.checked_add(1).unwrap_or(0);
         next_id
     }
 }
