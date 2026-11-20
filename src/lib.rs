@@ -5,7 +5,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
-use core::{alloc::Layout, mem};
+use core::{alloc::Layout, mem, ops::Bound};
 
 use alloc::collections::BTreeMap;
 use hashbrown::HashMap;
@@ -234,7 +234,7 @@ impl<const GRANULARITY: usize> JitAlloc<GRANULARITY> {
 
         let (shard_addr, shard) = self
             .shards_by_rx
-            .range_mut(min..)
+            .range_mut((Bound::Excluded(&min), Bound::Included(&max)))
             .next()
             .ok_or(DeallocateError::InvalidParameter)?;
 
