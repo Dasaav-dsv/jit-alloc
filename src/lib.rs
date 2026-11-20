@@ -408,7 +408,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             self.adjust_node(
                 shard,
                 node_index,
-                prev_size.as_wide().as_signed(),
+                -prev_size.as_wide().as_signed(),
                 Some(new_offset),
             );
 

@@ -37,6 +37,7 @@ impl<T: Unsigned> Positive<T> {
 impl<T: Unsigned> ops::Add for Positive<T> {
     type Output = Positive<T>;
 
+    #[track_caller]
     fn add(self, rhs: Self) -> Self::Output {
         Self(self.0.strict_add(rhs.0).strict_add(T::ONE))
     }
@@ -45,6 +46,7 @@ impl<T: Unsigned> ops::Add for Positive<T> {
 impl<T: Unsigned> ops::Add<T> for Positive<T> {
     type Output = Positive<T>;
 
+    #[track_caller]
     fn add(self, rhs: T) -> Self::Output {
         Self(self.0.strict_add(rhs))
     }
@@ -53,6 +55,7 @@ impl<T: Unsigned> ops::Add<T> for Positive<T> {
 impl<T: Unsigned> ops::Sub for Positive<T> {
     type Output = T;
 
+    #[track_caller]
     fn sub(self, rhs: Self) -> Self::Output {
         self.0.strict_sub(rhs.0)
     }
@@ -61,6 +64,7 @@ impl<T: Unsigned> ops::Sub for Positive<T> {
 impl<T: Unsigned> ops::Sub<T> for Positive<T> {
     type Output = Positive<T>;
 
+    #[track_caller]
     fn sub(self, rhs: T) -> Self::Output {
         Self(self.0.strict_sub(rhs))
     }
@@ -85,30 +89,3 @@ impl<T: Unsigned> fmt::Display for Positive<T> {
         fmt::Display::fmt(&self.as_wide(), f)
     }
 }
-
-// macro_rules! impl_positive {
-//     ($($t:ty),+ $(,)?) => {
-//         $(
-//             impl TryFrom<$t> for Positive<$t> {
-//                 type Error = num::TryFromIntError;
-
-//                 fn try_from(value: $t) -> Result<Self, Self::Error> {
-//                     NonZero::try_from(value).map(|value| Self(value.get() - 1))
-//                 }
-//             }
-
-//             impl TryFrom<Positive<$t>> for $t {
-//                 type Error = num::TryFromIntError;
-
-//                 fn try_from(value: Positive<$t>) -> Result<Self, Self::Error> {
-//                     <$t>::try_from(value.get())
-//                 }
-//             }
-//         )+
-//     };
-// }
-
-// impl_positive! {
-//     u8,
-//     u16,
-// }

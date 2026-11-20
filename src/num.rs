@@ -38,7 +38,7 @@ pub trait Unsigned:
     const BITS: u32;
 
     type Wide: Unsigned;
-    type Signed;
+    type Signed: ops::Neg<Output = Self::Signed>;
 
     fn checked_add(self, rhs: Self) -> Option<Self>;
 
@@ -79,10 +79,12 @@ macro_rules! impl_unsigned {
                     <$t>::checked_sub(self, rhs)
                 }
 
+                #[track_caller]
                 fn strict_add(self, rhs: Self) -> Self {
                     <$t>::strict_add(self, rhs)
                 }
 
+                #[track_caller]
                 fn strict_sub(self, rhs: Self) -> Self {
                     <$t>::strict_sub(self, rhs)
                 }
