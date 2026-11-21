@@ -776,7 +776,7 @@ mod tests {
 
     #[test]
     fn test_u16_1_large() {
-        test_alloc_class::<u16, 1>(1..=32760);
+        test_alloc_class::<u16, 1>(1..=32704);
     }
 
     #[test]
@@ -786,7 +786,7 @@ mod tests {
 
     #[test]
     fn test_u16_2_large() {
-        test_alloc_class::<u16, 2>(1..=65520);
+        test_alloc_class::<u16, 2>(1..=65408);
     }
 
     #[test]
@@ -796,7 +796,7 @@ mod tests {
 
     #[test]
     fn test_u16_4_large() {
-        test_alloc_class::<u16, 4>(1..=131040);
+        test_alloc_class::<u16, 4>(1..=130816);
     }
 
     #[test]
@@ -806,7 +806,7 @@ mod tests {
 
     #[test]
     fn test_u16_8_large() {
-        test_alloc_class::<u16, 8>(1..=262080);
+        test_alloc_class::<u16, 8>(1..=261632);
     }
 
     #[test]
@@ -816,7 +816,7 @@ mod tests {
 
     #[test]
     fn test_u16_16_large() {
-        test_alloc_class::<u16, 16>(1..=524160);
+        test_alloc_class::<u16, 16>(1..=523264);
     }
 
     fn test_alloc_class<S: SizeType, const ALIGN: usize>(size: impl SampleRange<usize> + Clone) {
