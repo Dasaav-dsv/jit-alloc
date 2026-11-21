@@ -106,10 +106,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
     };
 }
 
-impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN>
-where
-    S: TryFrom<usize, Error = TryFromIntError>,
-{
+impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
     pub const fn new() -> Self {
         let _ = Self::MIN_ALIGN;
         Self {

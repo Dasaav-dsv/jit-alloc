@@ -20,19 +20,19 @@ pub trait Unsigned:
     + ops::Sub<Output = Self>
     + ops::Mul<Output = Self>
     + ops::Div<Output = Self>
-    + TryFrom<u8>
-    + TryFrom<u16>
-    + TryFrom<u32>
-    + TryFrom<u64>
-    + TryFrom<u128>
-    + TryFrom<usize>
-    + TryFrom<i8>
-    + TryFrom<i16>
-    + TryFrom<i32>
-    + TryFrom<i64>
-    + TryFrom<i128>
-    + TryFrom<isize>
-    + TryFrom<Self::Wide>
+    + TryFrom<u8, Error: fmt::Debug>
+    + TryFrom<u16, Error: fmt::Debug>
+    + TryFrom<u32, Error: fmt::Debug>
+    + TryFrom<u64, Error: fmt::Debug>
+    + TryFrom<u128, Error: fmt::Debug>
+    + TryFrom<usize, Error: fmt::Debug>
+    + TryFrom<i8, Error: fmt::Debug>
+    + TryFrom<i16, Error: fmt::Debug>
+    + TryFrom<i32, Error: fmt::Debug>
+    + TryFrom<i64, Error: fmt::Debug>
+    + TryFrom<i128, Error: fmt::Debug>
+    + TryFrom<isize, Error: fmt::Debug>
+    + TryFrom<Self::Wide, Error: fmt::Debug>
     + fmt::Debug
     + fmt::Display
     + private::Sealed

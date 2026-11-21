@@ -22,7 +22,7 @@ pub enum LayoutError {
     #[error("layout is invalid ({0})")]
     SizeAlign(#[from] alloc::alloc::LayoutError),
 
-    #[error("layout is too big({0})")]
+    #[error("layout is too big ({0})")]
     Size(#[from] TryFromIntError),
 
     #[error("alignment ({align}) exceeds supported maximum ({max_align})")]
