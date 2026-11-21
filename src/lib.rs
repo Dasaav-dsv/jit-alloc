@@ -727,31 +727,114 @@ unsafe impl Send for LargeShard {}
 unsafe impl Sync for LargeShard {}
 
 #[cfg(test)]
-#[test]
-fn test() {
-    use alloc::vec;
+mod tests {
+    use alloc::{alloc::Layout, vec};
 
-    use rand::RngExt;
+    use rand::{RngExt, distr::uniform::SampleRange};
 
-    let mut rng = rand::rng();
+    use crate::{JitAlloc, SizeType};
 
-    let mut alloc = JitAlloc::<u16, 16>::new();
+    #[test]
+    fn test_u8_1() {
+        test_alloc_class::<u8, 1>(1..=120);
+    }
 
-    let mut allocs = vec![None; 1000];
+    #[test]
+    fn test_u8_2() {
+        test_alloc_class::<u8, 2>(1..=240);
+    }
 
-    for _ in 0..100000 {
-        let i = rng.random_range(0..1000);
+    #[test]
+    fn test_u8_4() {
+        test_alloc_class::<u8, 4>(1..=480);
+    }
 
-        match allocs[i].take() {
-            None => {
-                let size = rng.random_range(1..=10000);
-                let align = 1 << rng.random_range(0..8);
-                let layout = Layout::from_size_align(size, align).unwrap();
-                allocs[i] = Some((alloc.allocate(layout).unwrap().0, layout));
+    #[test]
+    fn test_u8_8() {
+        test_alloc_class::<u8, 8>(1..=960);
+    }
+
+    #[test]
+    fn test_u8_16() {
+        test_alloc_class::<u8, 16>(1..=1920);
+    }
+
+    #[test]
+    fn test_u8_32() {
+        test_alloc_class::<u8, 32>(1..=3840);
+    }
+
+    #[test]
+    fn test_u16_1_small() {
+        test_alloc_class::<u16, 1>(1..=120);
+    }
+
+    #[test]
+    fn test_u16_1_large() {
+        test_alloc_class::<u16, 1>(1..=32760);
+    }
+
+    #[test]
+    fn test_u16_2_small() {
+        test_alloc_class::<u16, 2>(1..=240);
+    }
+
+    #[test]
+    fn test_u16_2_large() {
+        test_alloc_class::<u16, 2>(1..=65520);
+    }
+
+    #[test]
+    fn test_u16_4_small() {
+        test_alloc_class::<u16, 4>(1..=480);
+    }
+
+    #[test]
+    fn test_u16_4_large() {
+        test_alloc_class::<u16, 4>(1..=131040);
+    }
+
+    #[test]
+    fn test_u16_8_small() {
+        test_alloc_class::<u16, 8>(1..=960);
+    }
+
+    #[test]
+    fn test_u16_8_large() {
+        test_alloc_class::<u16, 8>(1..=262080);
+    }
+
+    #[test]
+    fn test_u16_16_small() {
+        test_alloc_class::<u16, 16>(1..=1920);
+    }
+
+    #[test]
+    fn test_u16_16_large() {
+        test_alloc_class::<u16, 16>(1..=524160);
+    }
+
+    fn test_alloc_class<S: SizeType, const ALIGN: usize>(size: impl SampleRange<usize> + Clone) {
+        let mut rng = rand::rng();
+
+        let mut alloc = JitAlloc::<S, ALIGN>::new();
+
+        let mut allocs = vec![None; 1000];
+
+        for _ in 0..1000000 {
+            let i = rng.random_range(0..1000);
+
+            match allocs[i].take() {
+                None => {
+                    let size = rng.random_range(size.clone());
+                    let align = 1 << rng.random_range(0..8);
+                    let layout = Layout::from_size_align(size, align).unwrap();
+                    allocs[i] = Some((alloc.allocate(layout).unwrap().0, layout));
+                }
+                Some((rx_ptr, layout)) => unsafe {
+                    alloc.deallocate(rx_ptr, layout).unwrap();
+                },
             }
-            Some((rx_ptr, layout)) => unsafe {
-                alloc.deallocate(rx_ptr, layout).unwrap();
-            },
         }
     }
 }
