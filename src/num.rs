@@ -3,6 +3,10 @@ use core::{fmt, hash::Hash, ops};
 pub mod nonmax;
 pub mod positive;
 
+mod private {
+    pub trait Sealed {}
+}
+
 pub trait Unsigned:
     Sized
     + Copy
@@ -31,14 +35,19 @@ pub trait Unsigned:
     + TryFrom<Self::Wide>
     + fmt::Debug
     + fmt::Display
+    + private::Sealed
 {
-    const MIN: Self;
+    const ZERO: Self;
     const ONE: Self;
     const MAX: Self;
     const BITS: u32;
 
     type Wide: Unsigned;
     type Signed: ops::Neg<Output = Self::Signed>;
+
+    fn wrapping_add(self, rhs: Self) -> Self;
+
+    fn wrapping_sub(self, rhs: Self) -> Self;
 
     fn checked_add(self, rhs: Self) -> Option<Self>;
 
@@ -63,13 +72,21 @@ macro_rules! impl_unsigned {
     ($($t:ty { wide: $w:ty, signed: $s:ty $(,)?}),+ $(,)?) => {
         $(
             impl Unsigned for $t {
-                const MIN: Self = <$t>::MIN;
+                const ZERO: Self = <$t>::MIN;
                 const MAX: Self = <$t>::MAX;
                 const ONE: Self = 1;
                 const BITS: u32 = <$t>::BITS;
 
                 type Wide = $w;
                 type Signed = $s;
+
+                fn wrapping_add(self, rhs: Self) -> Self {
+                    <$t>::wrapping_add(self, rhs)
+                }
+
+                fn wrapping_sub(self, rhs: Self) -> Self {
+                    <$t>::wrapping_sub(self, rhs)
+                }
 
                 fn checked_add(self, rhs: Self) -> Option<Self> {
                     <$t>::checked_add(self, rhs)
@@ -109,6 +126,7 @@ macro_rules! impl_unsigned {
                     self as usize
                 }
             }
+            impl private::Sealed for $t {}
         )+
     };
 }

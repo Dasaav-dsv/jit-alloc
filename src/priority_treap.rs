@@ -1,4 +1,4 @@
-use core::cmp::Ordering;
+use core::{cmp::Ordering, ops};
 
 use slab::Slab;
 
@@ -13,7 +13,7 @@ pub struct Treap<S: SizeType> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct TreapNode<S: SizeType> {
+pub struct TreapNode<S: SizeType> {
     inner: Node<S>,
 
     left: Option<NodeIndex>,
@@ -65,19 +65,19 @@ impl<S: SizeType> Treap<S> {
                     .expect("exceeded u32::MAX nodes");
 
                 if is_left {
-                    self.nodes[parent.as_usize()].left = Some(child);
+                    self[parent].left = Some(child);
                 } else {
-                    self.nodes[parent.as_usize()].right = Some(child);
+                    self[parent].right = Some(child);
                 }
 
                 child
             }
         };
 
-        while let Some(parent_i) = self.nodes[i.as_usize()].parent {
-            let node = &self.nodes[i.as_usize()];
+        while let Some(parent_i) = self[i].parent {
+            let node = &self[i];
 
-            if node.inner.2 <= self.nodes[parent_i.as_usize()].inner.2 {
+            if node.inner.2 <= self[parent_i].inner.2 {
                 break;
             }
 
@@ -90,7 +90,7 @@ impl<S: SizeType> Treap<S> {
     pub fn remove(&mut self, node: Node<S>) -> Option<Node<S>> {
         let i = self.binary_search(node.0).ok()?;
 
-        if self.nodes[i.as_usize()].inner != node {
+        if self[i].inner != node {
             return None;
         }
 
@@ -99,12 +99,12 @@ impl<S: SizeType> Treap<S> {
 
     pub fn remove_at(&mut self, i: NodeIndex) -> Option<Node<S>> {
         loop {
-            let TreapNode { left, right, .. } = self.nodes[i.as_usize()];
+            let TreapNode { left, right, .. } = self[i];
 
             let child_i = match (left, right) {
                 (Some(left), Some(right)) => {
-                    let left_prio = self.nodes[left.as_usize()].inner.2;
-                    let right_prio = self.nodes[right.as_usize()].inner.2;
+                    let left_prio = self[left].inner.2;
+                    let right_prio = self[right].inner.2;
                     if left_prio >= right_prio { left } else { right }
                 }
                 (Some(left), None) => left,
@@ -115,12 +115,12 @@ impl<S: SizeType> Treap<S> {
             self.rotate(child_i, i);
         }
 
-        let removed = self.nodes.remove(i.as_usize());
+        let removed = self.nodes.remove(i.get() as usize);
 
         match removed.parent {
             None => self.root = None,
             Some(parent_i) => {
-                let parent = &mut self.nodes[parent_i.as_usize()];
+                let parent = &mut self[parent_i];
                 if Some(i) == parent.left {
                     parent.left = None;
                 } else {
@@ -135,7 +135,7 @@ impl<S: SizeType> Treap<S> {
     pub fn first_fit(&self, size: AlignedSize<S>) -> Option<&Node<S>> {
         let mut i = self.root?;
         loop {
-            let node = &self.nodes[i.as_usize()];
+            let node = &self[i];
 
             match size.cmp(&node.inner.0) {
                 Ordering::Less | Ordering::Equal => break Some(&node.inner),
@@ -147,7 +147,7 @@ impl<S: SizeType> Treap<S> {
     fn binary_search(&self, size: AlignedSize<S>) -> Result<NodeIndex, ChildIndex> {
         let mut i = self.root.ok_or(ChildIndex::Root)?;
         loop {
-            let node = &self.nodes[i.as_usize()];
+            let node = &self[i];
 
             match size.cmp(&node.inner.0) {
                 Ordering::Less => {
@@ -168,10 +168,7 @@ impl<S: SizeType> Treap<S> {
     }
 
     fn rotate(&mut self, child_i: NodeIndex, parent_i: NodeIndex) {
-        let (node, parent) = self
-            .nodes
-            .get2_mut(child_i.as_usize(), parent_i.as_usize())
-            .expect("treap contradiction");
+        let (node, parent) = self.get2_mut(child_i, parent_i);
 
         let grandparent = parent.parent;
 
@@ -189,11 +186,11 @@ impl<S: SizeType> Treap<S> {
         };
 
         if let Some(reparented) = reparented {
-            self.nodes[reparented.as_usize()].parent = Some(parent_i);
+            self[reparented].parent = Some(parent_i);
         }
 
         if let Some(grandparent) = grandparent {
-            let grandparent = &mut self.nodes[grandparent.as_usize()];
+            let grandparent = &mut self[grandparent];
 
             if Some(parent_i) == grandparent.left {
                 grandparent.left = Some(child_i);
@@ -205,6 +202,16 @@ impl<S: SizeType> Treap<S> {
         }
     }
 
+    fn get2_mut(
+        &mut self,
+        node1: NodeIndex,
+        node2: NodeIndex,
+    ) -> (&mut TreapNode<S>, &mut TreapNode<S>) {
+        self.nodes
+            .get2_mut(node1.get() as usize, node2.get() as usize)
+            .expect("treap contradiction")
+    }
+
     #[allow(unused)]
     fn assert_treap_properties(&self) {
         for (i, node) in self.nodes.iter() {
@@ -212,7 +219,7 @@ impl<S: SizeType> Treap<S> {
             if let Some(parent) = node.parent {
                 self.assert_parent_child(parent, child);
             } else {
-                assert_eq!(self.root.unwrap().as_usize(), i);
+                assert_eq!(self.root.unwrap().get() as usize, i);
             }
 
             if let Some(left_child) = node.left {
@@ -228,13 +235,13 @@ impl<S: SizeType> Treap<S> {
     fn assert_parent_child(&self, parent_i: NodeIndex, child_i: NodeIndex) {
         assert_ne!(parent_i, child_i);
 
-        let child = &self.nodes[child_i.as_usize()];
+        let child = &self[child_i];
 
         assert_eq!(child.parent, Some(parent_i));
 
-        let parent = &self.nodes[parent_i.as_usize()];
+        let parent = &self[parent_i];
 
-        assert!(child.inner.2 < parent.inner.2);
+        assert!(child.inner.2 <= parent.inner.2);
 
         if Some(child_i) == parent.left {
             assert!(child.inner.0 < parent.inner.0);
@@ -243,6 +250,20 @@ impl<S: SizeType> Treap<S> {
         if Some(child_i) == parent.right {
             assert!(child.inner.0 >= parent.inner.0);
         }
+    }
+}
+
+impl<S: SizeType> ops::Index<NodeIndex> for Treap<S> {
+    type Output = TreapNode<S>;
+
+    fn index(&self, index: NodeIndex) -> &Self::Output {
+        &self.nodes[index.get() as usize]
+    }
+}
+
+impl<S: SizeType> ops::IndexMut<NodeIndex> for Treap<S> {
+    fn index_mut(&mut self, index: NodeIndex) -> &mut Self::Output {
+        &mut self.nodes[index.get() as usize]
     }
 }
 

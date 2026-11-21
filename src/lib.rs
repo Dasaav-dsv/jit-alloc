@@ -5,7 +5,12 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
-use core::{alloc::Layout, mem, num::TryFromIntError, ops::Bound};
+use core::{
+    alloc::Layout,
+    mem,
+    num::TryFromIntError,
+    ops::{self, Bound},
+};
 
 use alloc::collections::BTreeMap;
 use hashbrown::HashMap;
@@ -131,7 +136,7 @@ where
             None => self.allocate_shard()?,
         };
 
-        let rx_addr = self.nodes.nodes[first_fit_index.as_usize()].shard_rx_addr;
+        let rx_addr = self.nodes[first_fit_index].shard_rx_addr;
         let shard = self
             .shards_by_rx
             .get_mut(&rx_addr)
@@ -201,7 +206,7 @@ where
         let node_index = match self.nodes.allocate_in_shard(
             &mut shard,
             AlignedSize::MAX,
-            AlignedOffset::MIN,
+            AlignedOffset::ZERO,
             None,
             None,
         ) {
@@ -392,7 +397,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         size: AlignedSize<S>,
         align: usize,
     ) -> Result<(AlignedSize<S>, AlignedOffset<S>), AllocateError> {
-        let mut node = self.nodes[node_index.as_usize()].clone();
+        let mut node = self[node_index].clone();
         let mut original = (node.size, node_index, node.id);
 
         assert!(node.allocated_offset.is_none(), "node already allocated");
@@ -426,7 +431,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
             self.allocate_in_shard(shard, prev_size, node.offset, Some(node_index), node.prev)?;
 
-            node = self.nodes[node_index.as_usize()].clone();
+            node = self[node_index].clone();
             original = (node.size, node_index, node.id);
         }
 
@@ -437,7 +442,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
             if let Some(next_index) = node.next {
                 assert!(
-                    self.nodes[next_index.as_usize()].offset > next_offset,
+                    self[next_index].offset > next_offset,
                     "next offset contradiction",
                 );
 
@@ -453,19 +458,12 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
         self.remove_from_freelist(original);
 
-        let node = &mut self.nodes[node_index.as_usize()];
+        let node = &mut self[node_index];
 
-        if let Err(e) = shard.allocated.try_insert(node.offset, node_index) {
-            let node = node.clone();
-            let occ = &self.nodes[e.entry.get().as_usize()];
-            let exp = &self.nodes[shard
-                .allocated
-                .get(&occ.allocated_offset.unwrap())
-                .unwrap()
-                .as_usize()];
-
-            panic!("{node:#?}\n{occ:#?}\n{exp:#?}")
-        }
+        shard
+            .allocated
+            .try_insert(node.offset, node_index)
+            .expect("can't overwrite another node");
 
         node.size = size;
         node.allocated_size = size;
@@ -509,15 +507,15 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         };
 
         if let Some(next_index) = next {
-            self.nodes[next_index.as_usize()].prev = Some(node_index);
+            self[next_index].prev = Some(node_index);
         } else if let Some(prev_index) = prev {
-            assert_eq!(self.nodes[prev_index.as_usize()].next, None, "broken link");
+            assert_eq!(self[prev_index].next, None, "broken link");
         }
 
         if let Some(prev_index) = prev {
-            self.nodes[prev_index.as_usize()].next = Some(node_index);
+            self[prev_index].next = Some(node_index);
         } else if let Some(next_index) = next {
-            assert_eq!(self.nodes[next_index.as_usize()].prev, None, "broken link");
+            assert_eq!(self[next_index].prev, None, "broken link");
         }
 
         self.insert_into_freelist((size, node_index, id));
@@ -536,7 +534,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             .get(&offset)
             .ok_or(DeallocateError::InvalidParameter)?;
 
-        let node = &mut self.nodes[node_index.as_usize()];
+        let node = &mut self[node_index];
 
         if node.allocated_offset != Some(offset) || node.allocated_size != size {
             return Err(DeallocateError::DoubleFree);
@@ -567,7 +565,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
         shard.allocated.remove(&offset);
 
-        let node = &mut self.nodes[node_index.as_usize()];
+        let node = &mut self[node_index];
 
         node.size = AlignedSize::MIN;
         node.allocated_size = AlignedSize::MIN;
@@ -575,26 +573,23 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
         if let Some(prev_index) = node.prev {
             if let Some(next_index) = node.next {
-                let (prev, next) = self
-                    .nodes
-                    .get2_mut(prev_index.as_usize(), next_index.as_usize())
-                    .expect("Slab indices are unique and don't dangle");
+                let (prev, next) = self.get2_mut(prev_index, next_index);
 
                 prev.next = Some(next_index);
                 next.prev = Some(prev_index);
             } else {
-                let prev = &mut self.nodes[prev_index.as_usize()];
+                let prev = &mut self[prev_index];
                 prev.next = None;
             }
 
-            self.nodes.remove(node_index.as_usize());
+            self.nodes.remove(node_index.get() as usize);
 
             self.adjust_node(prev_index, S::Wide::ONE.as_signed(), None);
 
             return Ok(());
         }
 
-        let node = &mut self.nodes[node_index.as_usize()];
+        let node = &mut self[node_index];
         node.id = !node.id;
 
         let node = (node.size, node_index, node.id);
@@ -608,8 +603,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         (size, node_index, id): (AlignedSize<S>, NodeIndex, NodeId),
     ) {
         assert_eq!(
-            self.nodes[node_index.as_usize()].allocated_offset,
-            None,
+            self[node_index].allocated_offset, None,
             "tried to insert an allocated node",
         );
 
@@ -617,10 +611,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             return;
         };
 
-        let (node, prev) = self
-            .nodes
-            .get2_mut(node_index.as_usize(), p_index.as_usize())
-            .expect("Slab indices are unique and don't dangle");
+        let (node, prev) = self.get2_mut(node_index, p_index);
 
         let pn_index = prev.next_free;
         let pp_index = prev.prev_free;
@@ -632,7 +623,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         prev.prev_free = Some(pp_index.unwrap_or(node_index));
 
         if let Some(pn_index) = pn_index {
-            self.nodes[pn_index.as_usize()].prev_free = Some(node_index);
+            self[pn_index].prev_free = Some(node_index);
         }
     }
 
@@ -644,18 +635,18 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             next_free,
             prev_free,
             ..
-        } = self.nodes[node_index.as_usize()];
+        } = self[node_index];
 
         if let Some(_removed) = self.freelist.remove((size, node_index, id))
             && let Some(prev_index) = prev_free
         {
-            let prev = &self.nodes[prev_index.as_usize()];
+            let prev = &self[prev_index];
             assert_eq!(prev.allocated_offset, None, "prev must be free");
 
             self.freelist.insert((prev.size, prev_index, prev.id));
         }
 
-        let node = &mut self.nodes[node_index.as_usize()];
+        let node = &mut self[node_index];
         node.next_free = None;
         node.prev_free = None;
 
@@ -663,14 +654,11 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             && let Some(prev_index) = prev_free
         {
             if next_index == prev_index {
-                let prev = &mut self.nodes[prev_index.as_usize()];
+                let prev = &mut self[prev_index];
                 prev.next_free = None;
                 prev.prev_free = None;
             } else {
-                let (next, prev) = self
-                    .nodes
-                    .get2_mut(next_index.as_usize(), prev_index.as_usize())
-                    .expect("Slab indices are unique and don't dangle");
+                let (next, prev) = self.get2_mut(next_index, prev_index);
 
                 next.prev_free = Some(prev_index);
                 prev.next_free = Some(next_index);
@@ -692,14 +680,14 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         delta_size: <S::Wide as Unsigned>::Signed,
         new_offset: Option<AlignedOffset<S>>,
     ) {
-        let node = &mut self.nodes[node_index.as_usize()];
+        let node = &mut self[node_index];
 
         if node.allocated_offset.is_none() {
             let node = (node.size, node_index, node.id);
             self.remove_from_freelist(node);
         }
 
-        let node = &mut self.nodes[node_index.as_usize()];
+        let node = &mut self[node_index];
 
         node.size = node
             .size
@@ -718,10 +706,30 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         }
     }
 
+    fn get2_mut(&mut self, node1: NodeIndex, node2: NodeIndex) -> (&mut Node<S>, &mut Node<S>) {
+        self.nodes
+            .get2_mut(node1.get() as usize, node2.get() as usize)
+            .expect("Slab indices are unique and don't dangle")
+    }
+
     fn next_id(&mut self) -> NodeId {
         let next_id = self.next_id;
         self.next_id = next_id.checked_add(1).unwrap_or(0);
         next_id
+    }
+}
+
+impl<S: SizeType, const ALIGN: usize> ops::Index<NodeIndex> for NodeList<S, ALIGN> {
+    type Output = Node<S>;
+
+    fn index(&self, index: NodeIndex) -> &Self::Output {
+        &self.nodes[index.get() as usize]
+    }
+}
+
+impl<S: SizeType, const ALIGN: usize> ops::IndexMut<NodeIndex> for NodeList<S, ALIGN> {
+    fn index_mut(&mut self, index: NodeIndex) -> &mut Self::Output {
+        &mut self.nodes[index.get() as usize]
     }
 }
 

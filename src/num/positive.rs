@@ -8,7 +8,7 @@ pub struct Positive<T: Unsigned>(T);
 
 impl<T: Unsigned> Positive<T> {
     #[allow(unused)]
-    pub const MIN: Self = Self(T::MIN);
+    pub const MIN: Self = Self(T::ZERO);
 
     #[allow(unused)]
     pub const MAX: Self = Self(T::MAX);
