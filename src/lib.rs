@@ -183,13 +183,12 @@ where
     }
 
     fn allocate_shard(&mut self) -> Result<NodeIndex, AllocateError> {
-        let (rx_ptr, rw_ptr) = self
-            .source
-            .map_rx_rw(Self::SHARD_SIZE)?
-            .ok_or(AllocateError::Other)?;
+        let size = self.shard_size();
+
+        let (rx_ptr, rw_ptr) = self.source.map_rx_rw(size)?.ok_or(AllocateError::Other)?;
 
         unsafe {
-            trap_rx_rw(rx_ptr, rw_ptr, Self::SHARD_SIZE);
+            trap_rx_rw(rx_ptr, rw_ptr, size);
         }
 
         let mut shard = Shard {
@@ -208,7 +207,7 @@ where
         ) {
             Ok(index) => index,
             Err(e) => unsafe {
-                let _ = self.source.unmap_rw_rx(rx_ptr, rw_ptr, Self::SHARD_SIZE);
+                let _ = self.source.unmap_rw_rx(rx_ptr, rw_ptr, size);
                 return Err(e);
             },
         };
@@ -244,7 +243,7 @@ where
     ) -> Result<(), DeallocateError> {
         let (_, size, _) = self.pad_layout_small(layout)?;
 
-        let min = rx_ptr.addr().saturating_sub(Self::SHARD_SIZE);
+        let min = rx_ptr.addr().saturating_sub(self.shard_size());
         let max = rx_ptr.addr();
 
         let (shard_addr, shard) = self
@@ -314,7 +313,13 @@ where
 
     fn pad_layout_large(&self, layout: Layout) -> Result<Layout, LayoutError> {
         let granularity = self.source.granularity();
-        Ok(pad_layout_to(layout, granularity, granularity)?.0)
+        Ok(pad_layout_to(layout, granularity, granularity)?
+            .0
+            .pad_to_align())
+    }
+
+    fn shard_size(&self) -> usize {
+        self.source.granularity().max(Self::SHARD_SIZE)
     }
 }
 
@@ -358,7 +363,7 @@ impl<S: SizeType, const ALIGN: usize> Drop for JitAlloc<S, ALIGN> {
                 if !shard.freed {
                     let _ = self
                         .source
-                        .unmap_rw(shard.rx_ptr, shard.rw_ptr, Self::SHARD_SIZE);
+                        .unmap_rw(shard.rx_ptr, shard.rw_ptr, self.shard_size());
                 }
             }
 
