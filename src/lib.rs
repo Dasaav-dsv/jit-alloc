@@ -254,18 +254,33 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
             .next()
             .ok_or(DeallocateError::InvalidParameter)?;
 
+        if shard.freed {
+            return Err(DeallocateError::DoubleFree);
+        }
+
         let offset = AlignedOffset::<S>::try_from((max - *shard_addr) / ALIGN)
             .map_err(|_| DeallocateError::InvalidParameter)?;
 
-        self.nodes.deallocate_in_shard(shard, size, offset)?;
+        if let Some(last_index) = self.nodes.deallocate_in_shard(shard, size, offset)? {
+            self.nodes.nodes.remove(last_index.get() as usize);
 
-        let size_bytes = size.as_wide().as_usize() * ALIGN;
-        let offset_bytes = offset.as_usize() * ALIGN;
+            shard.freed = true;
 
-        let rw_ptr = shard.rw_ptr.wrapping_add(offset_bytes);
+            let Shard { rx_ptr, rw_ptr, .. } = *shard;
+            let size = self.shard_size();
 
-        unsafe {
-            trap_rx_rw(rx_ptr, rw_ptr, size_bytes);
+            unsafe {
+                self.source.unmap_rw_rx(rx_ptr, rw_ptr, size)?;
+            }
+        } else {
+            let size_bytes = size.as_wide().as_usize() * ALIGN;
+            let offset_bytes = offset.as_usize() * ALIGN;
+
+            let rw_ptr = shard.rw_ptr.wrapping_add(offset_bytes);
+
+            unsafe {
+                trap_rx_rw(rx_ptr, rw_ptr, size_bytes);
+            }
         }
 
         Ok(())
@@ -365,13 +380,15 @@ impl<S: SizeType, const ALIGN: usize> Drop for JitAlloc<S, ALIGN> {
                 if !shard.freed {
                     let _ = self
                         .source
-                        .unmap_rw(shard.rx_ptr, shard.rw_ptr, self.shard_size());
+                        .unmap_rw_rx(shard.rx_ptr, shard.rw_ptr, self.shard_size());
                 }
             }
 
             for shard in mem::take(&mut self.large_shards_by_rx).into_values() {
                 if !shard.freed {
-                    let _ = self.source.unmap_rw(shard.rx_ptr, shard.rw_ptr, shard.size);
+                    let _ = self
+                        .source
+                        .unmap_rw_rx(shard.rx_ptr, shard.rw_ptr, shard.size);
                 }
             }
         }
@@ -525,7 +542,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         shard: &mut Shard<S>,
         size: AlignedSize<S>,
         offset: AlignedOffset<S>,
-    ) -> Result<(), DeallocateError> {
+    ) -> Result<Option<NodeIndex>, DeallocateError> {
         let node_index = *shard
             .allocated
             .get(&offset)
@@ -583,16 +600,20 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
             self.adjust_node(prev_index, S::Wide::ONE.as_signed(), None);
 
-            return Ok(());
+            Ok(None)
+        } else if node.next.is_some() {
+            let node = &mut self[node_index];
+            node.id = !node.id;
+
+            let node = (node.size, node_index, node.id);
+            self.insert_into_freelist(node);
+
+            Ok(None)
+        } else {
+            // `prev` and `next` are None, this is the last node.
+            assert!(shard.allocated.is_empty(), "broken link");
+            Ok(Some(node_index))
         }
-
-        let node = &mut self[node_index];
-        node.id = !node.id;
-
-        let node = (node.size, node_index, node.id);
-        self.insert_into_freelist(node);
-
-        Ok(())
     }
 
     fn insert_into_freelist(
