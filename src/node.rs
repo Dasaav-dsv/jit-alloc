@@ -1,7 +1,9 @@
 use crate::{AlignedOffset, AlignedSize, NodeId, NodeIndex, SizeType};
 
 #[derive(Clone, Debug)]
-#[repr(C, u16, align(4))]
+#[cfg_attr(target_pointer_width = "16", repr(C, u16))]
+#[cfg_attr(target_pointer_width = "32", repr(C, u16, align(4)))]
+#[cfg_attr(target_pointer_width = "64", repr(C, u16, align(8)))]
 pub enum Node<S: SizeType> {
     Free(FreeNode<S>),
     Allocated(AllocatedNode<S>),
