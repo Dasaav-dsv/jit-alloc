@@ -1,4 +1,4 @@
-use core::{fmt, hash, mem, num::NonZero};
+use core::{fmt, hash, num::NonZero};
 
 use crate::num::Unsigned;
 
@@ -7,6 +7,9 @@ use crate::num::Unsigned;
 pub struct NonMax<T: HasZero>(T::NonZero);
 
 pub trait HasZero: Unsigned + From<Self::NonZero> {
+    const NZ_ONE: Self::NonZero;
+    const NZ_MAX: Self::NonZero;
+
     type NonZero: Clone
         + Copy
         + PartialEq
@@ -20,16 +23,10 @@ pub trait HasZero: Unsigned + From<Self::NonZero> {
 
 impl<T: HasZero> NonMax<T> {
     #[allow(unused)]
-    pub const ZERO: Self = unsafe {
-        // SAFETY: `Unsigned` is a sealed trait only implemented for integral types.
-        Self::from_nonzero_unchecked(T::ONE)
-    };
+    pub const ZERO: Self = Self(<T as HasZero>::NZ_ONE);
 
     #[allow(unused)]
-    pub const MAX: Self = unsafe {
-        // SAFETY: `Unsigned` is a sealed trait only implemented for integral types.
-        Self::from_nonzero_unchecked(T::MAX)
-    };
+    pub const MAX: Self = Self(<T as HasZero>::NZ_MAX);
 
     pub fn new(value: T) -> Option<Self> {
         let nonzero = T::NonZero::try_from(value.wrapping_add(T::ONE)).ok()?;
@@ -38,14 +35,6 @@ impl<T: HasZero> NonMax<T> {
 
     pub fn get(self) -> T {
         T::from(self.0) - T::ONE
-    }
-
-    /// # Safety
-    ///
-    /// `value` must not be zero. [`NonZero<T>`] must be trivially transmutable
-    /// from a non zero `value`.
-    const unsafe fn from_nonzero_unchecked(value: T) -> Self {
-        unsafe { Self(mem::transmute_copy::<T, T::NonZero>(&value)) }
     }
 }
 
@@ -82,6 +71,8 @@ macro_rules! impl_nonmax {
     ($($t:ty),+ $(,)?) => {
         $(
             impl HasZero for $t {
+                const NZ_ONE: Self::NonZero = NonZero::<$t>::MIN;
+                const NZ_MAX: Self::NonZero = NonZero::<$t>::MAX;
                 type NonZero = NonZero<$t>;
             }
         )+
