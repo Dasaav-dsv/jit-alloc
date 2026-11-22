@@ -1,7 +1,4 @@
-use core::{
-    fmt,
-    num::{NonZero, TryFromIntError},
-};
+use core::num::{NonZero, TryFromIntError};
 
 use thiserror::Error;
 
@@ -73,7 +70,7 @@ impl OsError {
     #[cfg(debug_assertions)]
     pub(crate) fn new(
         code: Option<NonZero<i32>>,
-        args: fmt::Arguments<'_>,
+        args: core::fmt::Arguments<'_>,
         file: &'static str,
         line: u32,
         column: u32,

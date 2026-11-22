@@ -1,6 +1,6 @@
 use core::{fmt, mem, num::NonZero, slice};
 
-use alloc::{borrow::Cow, fmt::format, string::ToString, vec::Vec};
+use alloc::{borrow::Cow, string::ToString, vec::Vec};
 use thiserror::Error;
 
 pub(crate) mod err_if;
@@ -43,7 +43,7 @@ impl OsErrorInner {
     ) -> Self {
         let expr = args
             .as_str()
-            .map_or_else(|| Cow::Owned(format(args)), Cow::Borrowed);
+            .map_or_else(|| Cow::Owned(alloc::fmt::format(args)), Cow::Borrowed);
 
         Self::Single(OsErrorSource {
             code,
