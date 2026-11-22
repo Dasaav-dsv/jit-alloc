@@ -1,3 +1,4 @@
+#![cfg(not(miri))]
 #![allow(unused)]
 
 pub struct Specialize<T>(pub T);

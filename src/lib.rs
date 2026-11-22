@@ -738,6 +738,8 @@ unsafe impl Sync for LargeShard {}
 
 #[cfg(test)]
 mod tests {
+    use core::slice;
+
     use alloc::{alloc::Layout, vec};
 
     use rand::{RngExt, distr::uniform::SampleRange};
@@ -829,19 +831,33 @@ mod tests {
 
         let mut alloc = JitAlloc::<S, ALIGN>::new();
 
-        let mut allocs = vec![None; 1000];
+        let mut allocs = vec![];
+        #[cfg(miri)]
+        allocs.resize_with(50, || None);
+        #[cfg(not(miri))]
+        allocs.resize_with(1000, || None);
 
-        for _ in 0..1000000 {
-            let i = rng.random_range(0..1000);
+        #[cfg(miri)]
+        let count = 0..1000;
+        #[cfg(not(miri))]
+        let count = 0..1000000;
+
+        for _ in count {
+            let i = rng.random_range(0..allocs.len());
 
             match allocs[i].take() {
                 None => {
                     let size = rng.random_range(size.clone());
                     let align = 1 << rng.random_range(0..8);
                     let layout = Layout::from_size_align(size, align).unwrap();
-                    allocs[i] = Some((alloc.allocate(layout).unwrap().0, layout));
+
+                    let (rx, rw) = alloc.allocate(layout).unwrap();
+
+                    let rw = unsafe { slice::from_raw_parts_mut(rw, size) };
+
+                    allocs[i] = Some((rx, rw, layout));
                 }
-                Some((rx_ptr, layout)) => unsafe {
+                Some((rx_ptr, _, layout)) => unsafe {
                     alloc.deallocate(rx_ptr, layout).unwrap();
                 },
             }

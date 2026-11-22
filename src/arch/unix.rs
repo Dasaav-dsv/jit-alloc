@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(all(unix, not(miri)))]
 #![allow(
     irrefutable_let_patterns,
     clippy::unnecessary_cast,

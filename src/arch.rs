@@ -1,3 +1,4 @@
+mod miri;
 pub mod protect;
 pub mod trap;
 mod unix;
@@ -5,18 +6,22 @@ mod windows;
 
 use crate::error::OsResult;
 
-#[cfg(unix)]
+#[cfg(all(unix, not(miri)))]
 pub use crate::arch::unix::last_os_error;
-#[cfg(unix)]
+#[cfg(all(unix, not(miri)))]
 use crate::arch::unix::{BackingFdProvider, granularity, map_rx_rw, unmap_rw, unmap_rw_rx};
-#[cfg(windows)]
+
+#[cfg(all(windows, not(miri)))]
 pub use crate::arch::windows::last_os_error;
-#[cfg(windows)]
+#[cfg(all(windows, not(miri)))]
 use crate::arch::windows::{granularity, map_rx_rw, unmap_rw, unmap_rw_rx};
+
+#[cfg(miri)]
+use crate::arch::miri::{granularity, map_rx_rw, unmap_rw, unmap_rw_rx};
 
 #[derive(Debug)]
 pub struct MemmapSource {
-    #[cfg(unix)]
+    #[cfg(all(unix, not(miri)))]
     inner: BackingFdProvider,
 
     #[cfg(feature = "std")]
@@ -29,7 +34,7 @@ pub struct MemmapSource {
 impl MemmapSource {
     pub const fn new() -> Self {
         Self {
-            #[cfg(unix)]
+            #[cfg(all(unix, not(miri)))]
             inner: BackingFdProvider::new(),
 
             #[cfg(feature = "std")]
@@ -42,11 +47,11 @@ impl MemmapSource {
 
     pub fn map_rx_rw(&mut self, size: usize) -> OsResult<Option<(*const u8, *mut u8)>> {
         assert!(size.is_multiple_of(self.granularity()));
-        #[cfg(unix)]
+        #[cfg(all(unix, not(miri)))]
         unsafe {
             map_rx_rw(size, &mut self.inner)
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, miri))]
         unsafe {
             map_rx_rw(size)
         }
