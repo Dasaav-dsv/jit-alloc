@@ -106,7 +106,7 @@ enum BackingFd {
 type OpenStrategy = fn(&mut BackingFdProvider, size: usize) -> OsResult<BackingFd>;
 
 impl BackingFdProvider {
-    /// Creates a provider with multiple platform and feature flag dependent strategies
+    /// Returns a provider with multiple platform and feature flag dependent strategies
     /// for opening a fd that can be mapped as executable.
     ///
     /// The first one to succeed is memoized, failed strategies are discarded.
@@ -174,6 +174,25 @@ impl BackingFdProvider {
         }
     }
 
+    /// Returns a provider that uses a user provided fd to map as executable memory.
+    /// The ownership of the file descriptor is passed to this function. It must be opened
+    /// with at least read and write permissions.
+    ///
+    /// # Safety
+    ///
+    /// Other code must not modify the underlying file or use this fd. All memory mapped file
+    /// dangers and caveats apply.
+    #[cfg(all(unix, not(miri)))]
+    pub unsafe fn new_with_fd(fd: c_int) -> OsResult<Self> {
+        let fd = unsafe { BackingFd::with_user_fd(fd)? };
+        Ok(Self {
+            last_fd: Some(fd),
+            last_strategy: 0,
+            strategies: &[],
+            random_state: 0x9e3779b97f4a7c13,
+        })
+    }
+
     /// Allocates a read-execute and a read-write mapping pointing to the same memory.
     ///
     /// The mappings may overlap and `pthread_jit_write_protect_np` must be called before
@@ -234,6 +253,13 @@ impl BackingFdProvider {
 }
 
 impl BackingFd {
+    #[cfg(all(unix, not(miri)))]
+    pub unsafe fn with_user_fd(fd: c_int) -> OsResult<Self> {
+        let fd = unsafe { os_err_if!(dup(fd) == -1).chain(os_err_if!(close(fd) == -1))? };
+        let size = granularity();
+        BackingFd::try_map_resize(size, fd, |fd| BackingFd::Resizable { fd, offset: 0 })
+    }
+
     /// Allocates a read-execute and a read-write mapping pointing to the same memory.
     ///
     /// The mappings may overlap and `pthread_jit_write_protect_np` must be called before

@@ -99,6 +99,26 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         }
     }
 
+    /// Returns an allocator that uses a user provided fd to map as executable memory.
+    /// The ownership of the file descriptor is passed to this function. It must be opened
+    /// with at least read and write permissions.
+    ///
+    /// # Safety
+    ///
+    /// Other code must not modify the underlying file or use this fd. All memory mapped file
+    /// dangers and caveats apply.
+    #[cfg(all(unix, not(miri)))]
+    pub unsafe fn new_with_source_fd(fd: core::ffi::c_int) -> error::OsResult<Self> {
+        let _ = Self::MIN_ALIGN;
+        let source = unsafe { MemmapSource::new_with_fd(fd)? };
+        Ok(Self {
+            source,
+            shards_by_rx: BTreeMap::new(),
+            large_shards_by_rx: HashMap::with_hasher(FxBuildHasher),
+            nodes: NodeList::new(),
+        })
+    }
+
     pub fn allocate(&mut self, layout: Layout) -> Result<(*const u8, *mut u8), AllocateError> {
         if layout.pad_to_align().size() < Self::LARGE_SIZE {
             self.allocate_small(layout)
@@ -725,88 +745,89 @@ mod tests {
 
     #[test]
     fn test_u8_1() {
-        test_alloc_class::<u8, 1>(1..=120);
+        test_alloc_class(JitAlloc::<u8, 1>::new(), 1..=120);
     }
 
     #[test]
     fn test_u8_2() {
-        test_alloc_class::<u8, 2>(1..=240);
+        test_alloc_class(JitAlloc::<u8, 2>::new(), 1..=240);
     }
 
     #[test]
     fn test_u8_4() {
-        test_alloc_class::<u8, 4>(1..=480);
+        test_alloc_class(JitAlloc::<u8, 4>::new(), 1..=480);
     }
 
     #[test]
     fn test_u8_8() {
-        test_alloc_class::<u8, 8>(1..=960);
+        test_alloc_class(JitAlloc::<u8, 8>::new(), 1..=960);
     }
 
     #[test]
     fn test_u8_16() {
-        test_alloc_class::<u8, 16>(1..=1920);
+        test_alloc_class(JitAlloc::<u8, 16>::new(), 1..=1920);
     }
 
     #[test]
     fn test_u8_32() {
-        test_alloc_class::<u8, 32>(1..=3840);
+        test_alloc_class(JitAlloc::<u8, 32>::new(), 1..=3840);
     }
 
     #[test]
     fn test_u16_1_small() {
-        test_alloc_class::<u16, 1>(1..=120);
+        test_alloc_class(JitAlloc::<u16, 1>::new(), 1..=120);
     }
 
     #[test]
     fn test_u16_1_large() {
-        test_alloc_class::<u16, 1>(1..=32704);
+        test_alloc_class(JitAlloc::<u16, 1>::new(), 1..=32704);
     }
 
     #[test]
     fn test_u16_2_small() {
-        test_alloc_class::<u16, 2>(1..=240);
+        test_alloc_class(JitAlloc::<u16, 2>::new(), 1..=240);
     }
 
     #[test]
     fn test_u16_2_large() {
-        test_alloc_class::<u16, 2>(1..=65408);
+        test_alloc_class(JitAlloc::<u16, 2>::new(), 1..=65408);
     }
 
     #[test]
     fn test_u16_4_small() {
-        test_alloc_class::<u16, 4>(1..=480);
+        test_alloc_class(JitAlloc::<u16, 4>::new(), 1..=480);
     }
 
     #[test]
     fn test_u16_4_large() {
-        test_alloc_class::<u16, 4>(1..=130816);
+        test_alloc_class(JitAlloc::<u16, 4>::new(), 1..=130816);
     }
 
     #[test]
     fn test_u16_8_small() {
-        test_alloc_class::<u16, 8>(1..=960);
+        test_alloc_class(JitAlloc::<u16, 8>::new(), 1..=960);
     }
 
     #[test]
     fn test_u16_8_large() {
-        test_alloc_class::<u16, 8>(1..=261632);
+        test_alloc_class(JitAlloc::<u16, 8>::new(), 1..=261632);
     }
 
     #[test]
     fn test_u16_16_small() {
-        test_alloc_class::<u16, 16>(1..=1920);
+        test_alloc_class(JitAlloc::<u16, 16>::new(), 1..=1920);
     }
 
     #[test]
     fn test_u16_16_large() {
-        test_alloc_class::<u16, 16>(1..=523264);
+        test_alloc_class(JitAlloc::<u16, 16>::new(), 1..=523264);
     }
 
-    fn test_alloc_class<S: SizeType, const ALIGN: usize>(size: impl SampleRange<usize> + Clone) {
+    fn test_alloc_class<S: SizeType, const ALIGN: usize>(
+        mut alloc: JitAlloc<S, ALIGN>,
+        size: impl SampleRange<usize> + Clone,
+    ) {
         let mut rng = rand::rng();
-
-        let mut alloc = JitAlloc::<S, ALIGN>::new();
 
         let mut allocs = vec![];
         #[cfg(miri)]
@@ -839,5 +860,32 @@ mod tests {
                 },
             }
         }
+    }
+
+    #[test]
+    #[cfg(all(unix, not(miri)))]
+    fn source_fd_test() {
+        use std::{
+            env,
+            fs::{self, File},
+            os::fd::IntoRawFd,
+            path::PathBuf,
+        };
+
+        let mut path = PathBuf::from(env::args_os().next().unwrap());
+        path.set_file_name("source_fd_test");
+
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)
+            .unwrap();
+
+        fs::remove_file(path).unwrap();
+
+        let alloc = unsafe { JitAlloc::<u16, 1>::new_with_source_fd(file.into_raw_fd()).unwrap() };
+
+        test_alloc_class(alloc, 1..=32704);
     }
 }

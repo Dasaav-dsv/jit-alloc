@@ -45,6 +45,15 @@ impl MemmapSource {
         }
     }
 
+    #[cfg(all(unix, not(miri)))]
+    pub unsafe fn new_with_fd(fd: core::ffi::c_int) -> OsResult<Self> {
+        let inner = unsafe { BackingFdProvider::new_with_fd(fd)? };
+        Ok(Self {
+            inner,
+            ..Self::new()
+        })
+    }
+
     pub fn map_rx_rw(&mut self, size: usize) -> OsResult<Option<(*const u8, *mut u8)>> {
         assert!(size.is_multiple_of(self.granularity()));
         #[cfg(all(unix, not(miri)))]
