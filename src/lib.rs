@@ -231,16 +231,15 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
     ) -> Result<(), DeallocateError> {
         let (_, size, _) = self.pad_layout_small(layout)?;
 
-        let min = rx_ptr.addr().saturating_sub(self.shard_size());
-        let max = rx_ptr.addr();
+        let rx_addr = rx_ptr.addr();
 
         let (&shard_addr, shard) = self
             .shards_by_rx
-            .range_mut(..=max)
+            .range_mut(..=rx_addr)
             .next_back()
             .ok_or(DeallocateError::InvalidParameter)?;
 
-        let offset = AlignedOffset::<S>::try_from((max - shard_addr) / ALIGN)
+        let offset = AlignedOffset::<S>::try_from((rx_addr - shard_addr) / ALIGN)
             .map_err(|_| DeallocateError::InvalidParameter)?;
 
         if let Some(last_index) = self.nodes.deallocate_in_shard(shard, size, offset)? {
