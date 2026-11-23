@@ -70,15 +70,13 @@ struct Shard<S: SizeType> {
     rx_ptr: *const u8,
     rw_ptr: *mut u8,
     allocated: HashMap<AlignedOffset<S>, NodeIndex, FxBuildHasher>,
-    freed: bool,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct LargeShard {
     rx_ptr: *const u8,
     rw_ptr: *mut u8,
     size: usize,
-    freed: bool,
 }
 
 impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
@@ -161,7 +159,6 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
                 rx_ptr,
                 rw_ptr,
                 size,
-                freed: false,
             },
         );
 
@@ -181,7 +178,6 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
             rx_ptr,
             rw_ptr,
             allocated: HashMap::with_hasher(FxBuildHasher),
-            freed: false,
         };
 
         let node_index = match self.nodes.allocate_in_shard(
@@ -232,28 +228,23 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         let min = rx_ptr.addr().saturating_sub(self.shard_size());
         let max = rx_ptr.addr();
 
-        let (shard_addr, shard) = self
+        let (&shard_addr, shard) = self
             .shards_by_rx
             .range_mut((Bound::Excluded(&min), Bound::Included(&max)))
             .next()
             .ok_or(DeallocateError::InvalidParameter)?;
 
-        if shard.freed {
-            return Err(DeallocateError::DoubleFree);
-        }
-
-        let offset = AlignedOffset::<S>::try_from((max - *shard_addr) / ALIGN)
+        let offset = AlignedOffset::<S>::try_from((max - shard_addr) / ALIGN)
             .map_err(|_| DeallocateError::InvalidParameter)?;
 
         if let Some(last_index) = self.nodes.deallocate_in_shard(shard, size, offset)? {
             self.nodes.nodes.remove(last_index.get() as usize);
 
-            shard.freed = true;
-
             let Shard { rx_ptr, rw_ptr, .. } = *shard;
-            let size = self.shard_size();
+            self.shards_by_rx.remove(&shard_addr);
 
             unsafe {
+                let size = self.shard_size();
                 self.source.unmap_rw_rx(rx_ptr, rw_ptr, size)?;
             }
         } else {
@@ -279,21 +270,19 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
 
         let shard = self
             .large_shards_by_rx
-            .get_mut(&rx_ptr.addr())
-            .ok_or(DeallocateError::InvalidParameter)?;
+            .get(&rx_ptr.addr())
+            .ok_or(DeallocateError::InvalidParameter)?
+            .clone();
 
         if shard.size != layout.size() {
             return Err(DeallocateError::InvalidParameter);
         }
 
-        if shard.freed {
-            return Err(DeallocateError::DoubleFree);
-        }
-
-        shard.freed = true;
+        self.large_shards_by_rx.remove(&rx_ptr.addr());
 
         unsafe {
-            self.source.unmap_rw_rx(rx_ptr, shard.rw_ptr, shard.size)?;
+            self.source
+                .unmap_rw_rx(shard.rx_ptr, shard.rw_ptr, shard.size)?;
         }
 
         Ok(())
@@ -360,20 +349,16 @@ impl<S: SizeType, const ALIGN: usize> Default for JitAlloc<S, ALIGN> {
 impl<S: SizeType, const ALIGN: usize> Drop for JitAlloc<S, ALIGN> {
     fn drop(&mut self) {
         unsafe {
+            let size = self.shard_size();
+
             for shard in mem::take(&mut self.shards_by_rx).into_values() {
-                if !shard.freed {
-                    let _ = self
-                        .source
-                        .unmap_rw_rx(shard.rx_ptr, shard.rw_ptr, self.shard_size());
-                }
+                let _ = self.source.unmap_rw_rx(shard.rx_ptr, shard.rw_ptr, size);
             }
 
             for shard in mem::take(&mut self.large_shards_by_rx).into_values() {
-                if !shard.freed {
-                    let _ = self
-                        .source
-                        .unmap_rw_rx(shard.rx_ptr, shard.rw_ptr, shard.size);
-                }
+                let _ = self
+                    .source
+                    .unmap_rw_rx(shard.rx_ptr, shard.rw_ptr, shard.size);
             }
         }
     }
