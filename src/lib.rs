@@ -51,10 +51,7 @@ type NodeIndex = NonMax<u32>;
 #[derive(Debug)]
 pub struct JitAlloc<S: SizeType = u16, const ALIGN: usize = 1> {
     source: MemmapSource,
-
     shards_by_rx: BTreeMap<Addr, Shard<S>>,
-    large_shards_by_rx: HashMap<Addr, LargeShard, FxBuildHasher>,
-
     nodes: NodeList<S, ALIGN>,
 }
 
@@ -65,18 +62,12 @@ struct NodeList<S: SizeType, const ALIGN: usize> {
     nodes: Slab<Node<S>>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Shard<S: SizeType> {
     rx_ptr: *const u8,
     rw_ptr: *mut u8,
-    allocated: HashMap<AlignedOffset<S>, NodeIndex, FxBuildHasher>,
-}
-
-#[derive(Clone, Debug)]
-struct LargeShard {
-    rx_ptr: *const u8,
-    rw_ptr: *mut u8,
     size: usize,
+    allocated: HashMap<AlignedOffset<S>, NodeIndex, FxBuildHasher>,
 }
 
 impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
@@ -94,7 +85,6 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         Self {
             source: MemmapSource::new(),
             shards_by_rx: BTreeMap::new(),
-            large_shards_by_rx: HashMap::with_hasher(FxBuildHasher),
             nodes: NodeList::new(),
         }
     }
@@ -114,7 +104,6 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         Ok(Self {
             source,
             shards_by_rx: BTreeMap::new(),
-            large_shards_by_rx: HashMap::with_hasher(FxBuildHasher),
             nodes: NodeList::new(),
         })
     }
@@ -173,12 +162,13 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
             trap_rx_rw(rx_ptr, rw_ptr, size);
         }
 
-        self.large_shards_by_rx.insert(
+        self.shards_by_rx.insert(
             rx_ptr.addr(),
-            LargeShard {
+            Shard {
                 rx_ptr,
                 rw_ptr,
                 size,
+                allocated: HashMap::with_hasher(FxBuildHasher),
             },
         );
 
@@ -198,6 +188,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
             rx_ptr,
             rw_ptr,
             allocated: HashMap::with_hasher(FxBuildHasher),
+            size,
         };
 
         let node_index = match self.nodes.allocate_in_shard(
@@ -251,7 +242,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         let (&shard_addr, shard) = self
             .shards_by_rx
             .range_mut((Bound::Excluded(&min), Bound::Included(&max)))
-            .next()
+            .next_back()
             .ok_or(DeallocateError::InvalidParameter)?;
 
         let offset = AlignedOffset::<S>::try_from((max - shard_addr) / ALIGN)
@@ -289,7 +280,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         let layout = self.pad_layout_large(layout)?;
 
         let shard = self
-            .large_shards_by_rx
+            .shards_by_rx
             .get(&rx_ptr.addr())
             .ok_or(DeallocateError::InvalidParameter)?
             .clone();
@@ -298,7 +289,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
             return Err(DeallocateError::InvalidParameter);
         }
 
-        self.large_shards_by_rx.remove(&rx_ptr.addr());
+        self.shards_by_rx.remove(&rx_ptr.addr());
 
         unsafe {
             self.source
@@ -369,13 +360,7 @@ impl<S: SizeType, const ALIGN: usize> Default for JitAlloc<S, ALIGN> {
 impl<S: SizeType, const ALIGN: usize> Drop for JitAlloc<S, ALIGN> {
     fn drop(&mut self) {
         unsafe {
-            let size = self.shard_size();
-
             for shard in mem::take(&mut self.shards_by_rx).into_values() {
-                let _ = self.source.unmap_rw_rx(shard.rx_ptr, shard.rw_ptr, size);
-            }
-
-            for shard in mem::take(&mut self.large_shards_by_rx).into_values() {
                 let _ = self
                     .source
                     .unmap_rw_rx(shard.rx_ptr, shard.rw_ptr, shard.size);
@@ -729,9 +714,6 @@ impl<S: SizeType, const ALIGN: usize> ops::IndexMut<NodeIndex> for NodeList<S, A
 
 unsafe impl<S: SizeType> Send for Shard<S> {}
 unsafe impl<S: SizeType> Sync for Shard<S> {}
-
-unsafe impl Send for LargeShard {}
-unsafe impl Sync for LargeShard {}
 
 #[cfg(test)]
 mod tests {
