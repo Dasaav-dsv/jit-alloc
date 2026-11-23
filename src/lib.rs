@@ -5,12 +5,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
-use core::{
-    alloc::Layout,
-    mem,
-    num::TryFromIntError,
-    ops::{self, Bound},
-};
+use core::{alloc::Layout, mem, num::TryFromIntError, ops};
 
 use alloc::collections::BTreeMap;
 use hashbrown::HashMap;
@@ -241,7 +236,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
 
         let (&shard_addr, shard) = self
             .shards_by_rx
-            .range_mut((Bound::Excluded(&min), Bound::Included(&max)))
+            .range_mut(..=max)
             .next_back()
             .ok_or(DeallocateError::InvalidParameter)?;
 
