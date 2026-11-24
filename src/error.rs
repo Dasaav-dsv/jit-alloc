@@ -1,4 +1,4 @@
-use core::num::{NonZero, TryFromIntError};
+use core::num::NonZero;
 
 use thiserror::Error;
 
@@ -20,7 +20,7 @@ pub enum LayoutError {
     SizeAlign(#[from] alloc::alloc::LayoutError),
 
     #[error("layout is too big ({0})")]
-    Size(#[from] TryFromIntError),
+    Size(usize),
 
     #[error("alignment ({align}) exceeds supported maximum ({max_align})")]
     Overaligned { align: usize, max_align: usize },

@@ -5,7 +5,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
-use core::{alloc::Layout, mem, num::TryFromIntError, ops};
+use core::{alloc::Layout, mem, ops};
 
 use alloc::collections::BTreeMap;
 use hashbrown::HashMap;
@@ -29,7 +29,7 @@ mod node;
 pub mod num;
 mod priority_treap;
 
-pub trait SizeType: Unsigned + TryFrom<usize, Error = TryFromIntError> {}
+pub trait SizeType: Unsigned {}
 
 impl SizeType for u8 {}
 
@@ -300,8 +300,13 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         let granularity = self.source.granularity();
         let (layout, max_size) = pad_layout_to(layout, ALIGN, granularity)?;
 
-        let size = AlignedSize::<S>::try_from(layout.size().div_ceil(ALIGN))?;
-        let max_size = AlignedSize::<S>::try_from(max_size.div_ceil(ALIGN))?;
+        let Ok(size) = AlignedSize::<S>::try_from(layout.size().div_ceil(ALIGN)) else {
+            return Err(LayoutError::Size(layout.size()));
+        };
+
+        let Ok(max_size) = AlignedSize::<S>::try_from(max_size.div_ceil(ALIGN)) else {
+            return Err(LayoutError::Size(layout.size()));
+        };
 
         Ok((layout, size, max_size))
     }
