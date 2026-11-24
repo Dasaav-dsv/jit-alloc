@@ -1,77 +1,102 @@
-use crate::{AlignedOffset, AlignedSize, NodeId, NodeIndex, SizeType};
+use crate::{AlignedOffset, AlignedSize, NodeIndex, SizeType};
 
 #[derive(Clone, Debug)]
-#[cfg_attr(target_pointer_width = "16", repr(C, u16))]
-#[cfg_attr(target_pointer_width = "32", repr(C, u16, align(4)))]
-#[cfg_attr(target_pointer_width = "64", repr(C, u16, align(8)))]
 pub enum Node<S: SizeType> {
-    Free(FreeNode<S>),
-    Allocated(AllocatedNode<S>),
+    Free {
+        size: AlignedSize<S>,
+        offset: AlignedOffset<S>,
+
+        next_free: Option<NodeIndex>,
+
+        next: Option<NodeIndex>,
+        prev: Option<NodeIndex>,
+
+        prev_free: Option<NodeIndex>,
+
+        shard_rx_addr: usize,
+    },
+    Allocated {
+        size: AlignedSize<S>,
+        offset: AlignedOffset<S>,
+
+        next: Option<NodeIndex>,
+        prev: Option<NodeIndex>,
+
+        allocated_size: AlignedSize<S>,
+        allocated_offset: AlignedOffset<S>,
+    },
 }
 
-#[derive(Clone, Debug)]
-#[repr(C, packed(2))]
-pub struct FreeNode<S: SizeType> {
-    pub id: NodeId,
-
-    pub size: AlignedSize<S>,
-    pub offset: AlignedOffset<S>,
-
-    pub next: Option<NodeIndex>,
-    pub prev: Option<NodeIndex>,
-
-    pub next_free: Option<NodeIndex>,
-    pub prev_free: Option<NodeIndex>,
-
-    pub shard_rx_addr: usize,
+#[allow(unused)]
+pub struct FreeNode<'a, S: SizeType> {
+    pub size: &'a mut AlignedSize<S>,
+    pub offset: &'a mut AlignedOffset<S>,
+    pub next_free: &'a mut Option<NodeIndex>,
+    pub next: &'a mut Option<NodeIndex>,
+    pub prev: &'a mut Option<NodeIndex>,
+    pub prev_free: &'a mut Option<NodeIndex>,
+    pub shard_rx_addr: &'a mut usize,
 }
 
-#[derive(Clone, Debug)]
-#[repr(C, packed(2))]
-pub struct AllocatedNode<S: SizeType> {
-    pub id: NodeId,
-
-    pub size: AlignedSize<S>,
-    pub offset: AlignedOffset<S>,
-
-    pub next: Option<NodeIndex>,
-    pub prev: Option<NodeIndex>,
-
-    pub allocated_size: AlignedSize<S>,
-    pub allocated_offset: AlignedOffset<S>,
+#[allow(unused)]
+pub struct AllocatedNode<'a, S: SizeType> {
+    pub size: &'a mut AlignedSize<S>,
+    pub offset: &'a mut AlignedOffset<S>,
+    pub next: &'a mut Option<NodeIndex>,
+    pub prev: &'a mut Option<NodeIndex>,
+    pub allocated_size: &'a mut AlignedSize<S>,
+    pub allocated_offset: &'a mut AlignedOffset<S>,
 }
 
 impl<S: SizeType> Node<S> {
     #[track_caller]
-    pub fn unwrap_free(&self) -> &FreeNode<S> {
-        let Node::Free(node) = self else {
+    pub fn unwrap_free(&mut self) -> FreeNode<'_, S> {
+        let Node::Free {
+            size,
+            offset,
+            next_free,
+            next,
+            prev,
+            prev_free,
+            shard_rx_addr,
+        } = self
+        else {
             panic!("node is allocated");
         };
-        node
+
+        FreeNode {
+            size,
+            offset,
+            next_free,
+            next,
+            prev,
+            prev_free,
+            shard_rx_addr,
+        }
     }
 
     #[track_caller]
-    pub fn unwrap_free_mut(&mut self) -> &mut FreeNode<S> {
-        let Node::Free(node) = self else {
-            panic!("node is allocated");
-        };
-        node
-    }
-
-    #[track_caller]
-    pub fn unwrap_allocated(&self) -> &AllocatedNode<S> {
-        let Node::Allocated(node) = self else {
+    pub fn unwrap_allocated(&mut self) -> AllocatedNode<'_, S> {
+        let Node::Allocated {
+            size,
+            offset,
+            next,
+            prev,
+            allocated_size,
+            allocated_offset,
+        } = self
+        else {
             panic!("node is free");
         };
-        node
-    }
 
-    #[track_caller]
-    pub fn unwrap_allocated_mut(&mut self) -> &mut AllocatedNode<S> {
-        let Node::Allocated(node) = self else {
-            panic!("node is free");
-        };
-        node
+        AllocatedNode {
+            size,
+            offset,
+            next,
+            prev,
+            allocated_size,
+            allocated_offset,
+        }
     }
 
     #[track_caller]
@@ -80,21 +105,18 @@ impl<S: SizeType> Node<S> {
         next_free: Option<NodeIndex>,
         prev_free: Option<NodeIndex>,
         shard_rx_addr: usize,
-    ) -> &mut FreeNode<S> {
-        let free = self.unwrap_allocated().clone();
-
-        *self = Self::Free(FreeNode {
-            id: free.id,
-            size: free.size,
-            offset: free.offset,
-            next: free.next,
-            prev: free.prev,
+    ) -> FreeNode<'_, S> {
+        *self = Self::Free {
+            size: self.size(),
+            offset: self.offset(),
             next_free,
+            next: self.next(),
+            prev: self.prev(),
             prev_free,
             shard_rx_addr,
-        });
+        };
 
-        self.unwrap_free_mut()
+        self.unwrap_free()
     }
 
     #[track_caller]
@@ -102,39 +124,32 @@ impl<S: SizeType> Node<S> {
         &mut self,
         allocated_size: AlignedSize<S>,
         allocated_offset: AlignedOffset<S>,
-    ) -> &mut AllocatedNode<S> {
-        let free = self.unwrap_free().clone();
-
-        *self = Self::Allocated(AllocatedNode {
-            id: free.id,
-            size: free.size,
-            offset: free.offset,
-            next: free.next,
-            prev: free.prev,
+    ) -> AllocatedNode<'_, S> {
+        *self = Self::Allocated {
+            size: self.size(),
+            offset: self.offset(),
+            next: self.next(),
+            prev: self.prev(),
             allocated_size,
             allocated_offset,
-        });
+        };
 
-        self.unwrap_allocated_mut()
+        self.unwrap_allocated()
     }
 }
 
 macro_rules! impl_node {
-    ($($i:ident: $t:ty => { $get:ident, $set:ident $(,)?}),+ $(,)?) => {
+    ($($i:ident: $t:ty => { $ref:ident, $mut:ident $(,)?}),+ $(,)?) => {
         impl<S: SizeType> Node<S> {
             $(
-                pub fn $get(&self) -> $t {
-                    match self {
-                        Self::Free(node) => node.$i,
-                        Self::Allocated(node) => node.$i,
-                    }
+                pub fn $ref(&self) -> $t {
+                    let (Self::Free { $i, .. } | Self::Allocated { $i, .. }) = self;
+                    *$i
                 }
 
-                pub fn $set(&mut self, $i: $t) {
-                    match self {
-                        Self::Free(node) => node.$i = $i,
-                        Self::Allocated(node) => node.$i = $i,
-                    }
+                pub fn $mut(&mut self) -> &mut $t {
+                    let (Self::Free { $i, .. } | Self::Allocated { $i, .. }) = self;
+                    $i
                 }
             )+
         }
@@ -142,9 +157,8 @@ macro_rules! impl_node {
 }
 
 impl_node! {
-    id: NodeId => { get_id, set_id },
-    size: AlignedSize<S> => { get_size, set_size },
-    offset: AlignedOffset<S> => { get_offset, set_offset },
-    next: Option<NodeIndex> => { get_next, set_next },
-    prev: Option<NodeIndex> => { get_prev, set_prev },
+    size: AlignedSize<S> => { size, size_mut },
+    offset: AlignedOffset<S> => { offset, offset_mut },
+    next: Option<NodeIndex> => { next, next_mut },
+    prev: Option<NodeIndex> => { prev, prev_mut },
 }

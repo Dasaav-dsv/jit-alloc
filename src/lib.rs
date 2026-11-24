@@ -18,16 +18,16 @@ use crate::{
         trap::{TrapCode, trap_rx_rw},
     },
     error::{AllocateError, DeallocateError, LayoutError},
-    node::{FreeNode, Node},
+    freelist::Freelist,
+    node::Node,
     num::{Unsigned, nonmax::NonMax, positive::Positive},
-    priority_treap::Treap,
 };
 
 pub(crate) mod arch;
 pub mod error;
+mod freelist;
 mod node;
 pub mod num;
-mod priority_treap;
 
 pub trait SizeType: Unsigned {}
 
@@ -40,7 +40,6 @@ type Addr = usize;
 type AlignedSize<S> = Positive<S>;
 type AlignedOffset<S> = S;
 
-type NodeId = i16;
 type NodeIndex = NonMax<u32>;
 
 #[derive(Debug)]
@@ -52,8 +51,7 @@ pub struct JitAlloc<S: SizeType = u16, const ALIGN: usize = 1> {
 
 #[derive(Debug)]
 struct NodeList<S: SizeType, const ALIGN: usize> {
-    next_id: NodeId,
-    freelist: Treap<S>,
+    freelist: Freelist<S>,
     nodes: Slab<Node<S>>,
 }
 
@@ -115,7 +113,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         let (layout, size, max_size) = self.pad_layout_small(layout)?;
 
         let first_fit_index = match self.nodes.freelist.first_fit(max_size) {
-            Some((_, node_index, _)) => *node_index,
+            Some((_, node_index)) => node_index,
             None => self.allocate_shard()?,
         };
 
@@ -374,8 +372,7 @@ impl<S: SizeType, const ALIGN: usize> Drop for JitAlloc<S, ALIGN> {
 impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
     const fn new() -> Self {
         Self {
-            next_id: 0,
-            freelist: Treap::new(),
+            freelist: Freelist::new(),
             nodes: Slab::new(),
         }
     }
@@ -387,11 +384,11 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         size: AlignedSize<S>,
         align: usize,
     ) -> Result<(AlignedSize<S>, AlignedOffset<S>), AllocateError> {
-        let mut node = self[node_index].unwrap_free().clone();
+        let mut node = self[node_index].clone();
 
-        let mut original = (node.size, node_index, node.id);
+        let mut original = (node.size(), node_index);
 
-        let offset_bytes = node.offset.as_usize() * ALIGN;
+        let offset_bytes = node.offset().as_usize() * ALIGN;
 
         let rx_ptr_base = shard.rx_ptr.wrapping_add(offset_bytes);
         let rx_align_offset = rx_ptr_base.align_offset(align);
@@ -408,7 +405,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
         if let Some(prev_size) = AlignedSize::<S>::new(align_offset.as_wide()) {
             let new_offset = node
-                .offset
+                .offset()
                 .checked_add(align_offset)
                 .expect("offset must fit shard");
 
@@ -418,20 +415,26 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
                 Some(new_offset),
             );
 
-            self.allocate_in_shard(shard, prev_size, node.offset, Some(node_index), node.prev)?;
+            self.allocate_in_shard(
+                shard,
+                prev_size,
+                node.offset(),
+                Some(node_index),
+                node.prev(),
+            )?;
 
-            node = self[node_index].unwrap_free().clone();
-            original = (node.size, node_index, node.id);
+            node = self[node_index].clone();
+            original = (node.size(), node_index);
         }
 
-        assert!({ node.size } >= size, "node is too small");
+        assert!(node.size() >= size, "node is too small");
 
-        if let Some(next_size) = node.size.checked_sub(size) {
-            let next_offset = (size + node.offset).get().expect("offset must fit shard");
+        if let Some(next_size) = node.size().checked_sub(size) {
+            let next_offset = (size + node.offset()).get().expect("offset must fit shard");
 
-            if let Some(next_index) = node.next {
+            if let Some(next_index) = node.next() {
                 assert!(
-                    self[next_index].get_offset() > next_offset,
+                    self[next_index].offset() > next_offset,
                     "next offset contradiction",
                 );
 
@@ -441,7 +444,13 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
                     Some(next_offset),
                 );
             } else {
-                self.allocate_in_shard(shard, next_size, next_offset, node.next, Some(node_index))?;
+                self.allocate_in_shard(
+                    shard,
+                    next_size,
+                    next_offset,
+                    node.next(),
+                    Some(node_index),
+                )?;
             }
         }
 
@@ -449,17 +458,13 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
         shard
             .allocated
-            .try_insert(node.offset, node_index)
+            .try_insert(node.offset(), node_index)
             .expect("can't overwrite another node");
 
-        let node = self[node_index].make_allocated(size, node.offset);
-        node.size = size;
+        let node = self[node_index].make_allocated(size, node.offset());
+        *node.size = size;
 
-        if node.id < 0 {
-            node.id = !node.id;
-        }
-
-        Ok((size, node.offset))
+        Ok((size, *node.offset))
     }
 
     fn allocate_in_shard(
@@ -470,9 +475,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         next: Option<NodeIndex>,
         prev: Option<NodeIndex>,
     ) -> Result<NodeIndex, AllocateError> {
-        let id = self.next_id();
-        let key = self.nodes.insert(Node::Free(FreeNode {
-            id,
+        let key = self.nodes.insert(Node::Free {
             shard_rx_addr: shard.rx_ptr.addr(),
             next_free: None,
             prev_free: None,
@@ -480,7 +483,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             prev,
             size,
             offset,
-        }));
+        });
 
         let node_index = match NodeIndex::try_from(key) {
             Ok(index) => index,
@@ -491,18 +494,18 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         };
 
         if let Some(next_index) = next {
-            self[next_index].set_prev(Some(node_index));
+            *self[next_index].prev_mut() = Some(node_index);
         } else if let Some(prev_index) = prev {
-            assert_eq!(self[prev_index].get_next(), None, "broken link");
+            assert_eq!(self[prev_index].next(), None, "broken link");
         }
 
         if let Some(prev_index) = prev {
-            self[prev_index].set_next(Some(node_index));
+            *self[prev_index].next_mut() = Some(node_index);
         } else if let Some(next_index) = next {
-            assert_eq!(self[next_index].get_prev(), None, "broken link");
+            assert_eq!(self[next_index].prev(), None, "broken link");
         }
 
-        self.insert_into_freelist((size, node_index, id));
+        self.insert_into_freelist((size, node_index));
 
         Ok(node_index)
     }
@@ -518,13 +521,11 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             .get(&offset)
             .ok_or(DeallocateError::InvalidParameter)?;
 
-        let node = self[node_index].unwrap_allocated_mut();
+        let node = self[node_index].unwrap_allocated();
 
-        if { node.allocated_offset } != offset || { node.allocated_size } != size {
+        if *node.allocated_offset != offset || *node.allocated_size != size {
             return Err(DeallocateError::DoubleFree);
         }
-
-        assert!(node.id >= 0, "allocated node has negative priority");
 
         if let Some(merge_size) = node.size.checked_sub(AlignedSize::MIN) {
             let merge_offset = node
@@ -532,7 +533,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
                 .checked_add(S::ONE)
                 .expect("offset must fit shard");
 
-            if let Some(next_index) = node.next {
+            if let Some(next_index) = *node.next {
                 self.adjust_node(
                     next_index,
                     merge_size.as_wide().as_signed(),
@@ -547,17 +548,17 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         shard.allocated.remove(&offset);
 
         let node = self[node_index].make_free(None, None, shard.rx_ptr.addr());
-        node.size = AlignedSize::MIN;
+        *node.size = AlignedSize::MIN;
 
-        if let Some(prev_index) = node.prev {
-            if let Some(next_index) = node.next {
+        if let Some(prev_index) = *node.prev {
+            if let Some(next_index) = *node.next {
                 let (prev, next) = self.get2_mut(prev_index, next_index);
 
-                prev.set_next(Some(next_index));
-                next.set_prev(Some(prev_index));
+                *prev.next_mut() = Some(next_index);
+                *next.prev_mut() = Some(prev_index);
             } else {
                 let prev = &mut self[prev_index];
-                prev.set_next(None);
+                *prev.next_mut() = None;
             }
 
             self.nodes.remove(node_index.get() as usize);
@@ -567,9 +568,8 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             Ok(None)
         } else if { node.next }.is_some() {
             let node = &mut self[node_index];
-            node.set_id(!node.get_id());
 
-            let node = (node.get_size(), node_index, node.get_id());
+            let node = (node.size(), node_index);
             self.insert_into_freelist(node);
 
             Ok(None)
@@ -580,72 +580,64 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         }
     }
 
-    fn insert_into_freelist(
-        &mut self,
-        (size, node_index, id): (AlignedSize<S>, NodeIndex, NodeId),
-    ) {
+    fn insert_into_freelist(&mut self, (size, node_index): (AlignedSize<S>, NodeIndex)) {
         let _free = self[node_index].unwrap_free();
 
-        let Some((_, p_index, _)) = self.freelist.insert((size, node_index, id)) else {
+        let Some((_, p_index)) = self.freelist.insert((size, node_index)) else {
             return;
         };
 
         let (node, prev) = self.get2_mut(node_index, p_index);
-        let node = node.unwrap_free_mut();
-        let prev = prev.unwrap_free_mut();
+        let node = node.unwrap_free();
+        let prev = prev.unwrap_free();
 
-        let pn_index = prev.next_free;
-        let pp_index = prev.prev_free;
+        let pn_index = *prev.next_free;
+        let pp_index = *prev.prev_free;
 
-        node.next_free = Some(pn_index.unwrap_or(p_index));
-        node.prev_free = Some(p_index);
+        *node.next_free = Some(pn_index.unwrap_or(p_index));
+        *node.prev_free = Some(p_index);
 
-        prev.next_free = Some(node_index);
-        prev.prev_free = Some(pp_index.unwrap_or(node_index));
+        *prev.next_free = Some(node_index);
+        *prev.prev_free = Some(pp_index.unwrap_or(node_index));
 
         if let Some(pn_index) = pn_index {
-            self[pn_index].unwrap_free_mut().prev_free = Some(node_index);
+            *self[pn_index].unwrap_free().prev_free = Some(node_index);
         }
     }
 
-    fn remove_from_freelist(
-        &mut self,
-        (size, node_index, id): (AlignedSize<S>, NodeIndex, NodeId),
-    ) {
-        let &FreeNode {
-            prev_free,
-            next_free,
-            ..
-        } = self[node_index].unwrap_free();
+    fn remove_from_freelist(&mut self, (size, node_index): (AlignedSize<S>, NodeIndex)) {
+        let node = self[node_index].unwrap_free();
+        let next_free = *node.next_free;
+        let prev_free = *node.prev_free;
 
-        if let Some(_removed) = self.freelist.remove((size, node_index, id))
+        if let Some(_removed) = self.freelist.remove((size, node_index))
             && let Some(prev_index) = prev_free
         {
-            let prev = &self[prev_index].unwrap_free();
-            self.freelist.insert((prev.size, prev_index, prev.id));
+            let prev_size = *self[prev_index].unwrap_free().size;
+            self.freelist.insert((prev_size, prev_index));
         }
 
-        let node = self[node_index].unwrap_free_mut();
-        node.next_free = None;
-        node.prev_free = None;
+        let node = self[node_index].unwrap_free();
+        *node.next_free = None;
+        *node.prev_free = None;
 
         if let Some(next_index) = next_free
             && let Some(prev_index) = prev_free
         {
             if next_index == prev_index {
-                let prev = self[prev_index].unwrap_free_mut();
-                prev.next_free = None;
-                prev.prev_free = None;
+                let prev = self[prev_index].unwrap_free();
+                *prev.next_free = None;
+                *prev.prev_free = None;
             } else {
                 let (next, prev) = self.get2_mut(next_index, prev_index);
-                let next = next.unwrap_free_mut();
-                let prev = prev.unwrap_free_mut();
+                let next = next.unwrap_free();
+                let prev = prev.unwrap_free();
 
-                next.prev_free = Some(prev_index);
-                prev.next_free = Some(next_index);
+                *next.prev_free = Some(prev_index);
+                *prev.next_free = Some(next_index);
 
-                assert_ne!({ next.next_free }, Some(node_index), "broken link");
-                assert_ne!({ prev.prev_free }, Some(node_index), "broken link");
+                assert_ne!(*next.next_free, Some(node_index), "broken link");
+                assert_ne!(*prev.prev_free, Some(node_index), "broken link");
             }
         } else {
             assert!(
@@ -661,28 +653,28 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         delta_size: <S::Wide as Unsigned>::Signed,
         new_offset: Option<AlignedOffset<S>>,
     ) {
-        if let Node::Free(node) = &self[node_index] {
-            let node = (node.size, node_index, node.id);
+        if let Node::Free { size, .. } = self[node_index] {
+            let node = (size, node_index);
             self.remove_from_freelist(node);
         }
 
         let node = &mut self[node_index];
 
         let new_size = node
-            .get_size()
+            .size()
             .as_wide()
             .checked_add_signed(delta_size)
             .and_then(AlignedSize::new)
             .expect("size must fit node");
 
-        node.set_size(new_size);
+        *node.size_mut() = new_size;
 
         if let Some(new_offset) = new_offset {
-            node.set_offset(new_offset);
+            *node.offset_mut() = new_offset;
         }
 
-        if let Node::Free(node) = &self[node_index] {
-            let node = (node.size, node_index, node.id);
+        if let Node::Free { size, .. } = self[node_index] {
+            let node = (size, node_index);
             self.insert_into_freelist(node);
         }
     }
@@ -691,12 +683,6 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         self.nodes
             .get2_mut(node1.get() as usize, node2.get() as usize)
             .expect("Slab indices are unique and don't dangle")
-    }
-
-    fn next_id(&mut self) -> NodeId {
-        let next_id = self.next_id;
-        self.next_id = next_id.checked_add(1).unwrap_or(0);
-        next_id
     }
 }
 
