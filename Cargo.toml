@@ -16,11 +16,11 @@ thiserror = { version = "2.0.21", default-features = false }
 [target.'cfg(all(unix, not(miri)))'.dependencies]
 libc = { version = "0.2", default-features = false }
 
-[target.'cfg(target_os = "android")'.dependencies]
+[target.'cfg(all(target_os = "android", not(miri)))'.dependencies]
 ndk-sys = { version = "0.6.0", optional = true, default-features = false }
 
 [features]
-default = ["std", "shm_open", "tmp_file"]
+default = ["std", "asharedmem", "shm_open", "tmp_file"]
 std = ["rustc-hash/std", "slab/std", "thiserror/std"]
 asharedmem = ["dep:ndk-sys"]
 shm_open = []

@@ -195,7 +195,7 @@ mod tests {
 
     impl OsState {
         fn with(f: impl FnOnce()) {
-            Os::reset();
+            Os::with_mut(|os| *os = Default::default());
 
             OS_STATE.with_borrow_mut(|state| {
                 state.next_handle = 1;
@@ -238,12 +238,6 @@ mod tests {
                     .remove(&(map.addr() / ALLOCATION_GRANULARITY as usize)),
                 "map already closed"
             );
-        }
-    }
-
-    impl Os {
-        fn reset() {
-            Os::with_mut(|os| *os = Default::default());
         }
     }
 

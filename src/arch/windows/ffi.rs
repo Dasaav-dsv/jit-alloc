@@ -1,9 +1,4 @@
-#![allow(
-    unused,
-    non_camel_case_types,
-    non_snake_case,
-    clippy::upper_case_acronyms
-)]
+#![allow(unused, nonstandard_style, clippy::upper_case_acronyms)]
 
 use core::ffi::c_void;
 
@@ -171,9 +166,7 @@ os_mock_impl! {
         ) -> LPVOID {
             assert!(!hFileMappingObject.is_null());
             assert_eq!(dwDesiredAccess & !(FILE_MAP_READ | FILE_MAP_WRITE | FILE_MAP_EXECUTE), 0);
-            assert!(dwNumberOfBytesToMap.is_multiple_of(Os::with(|os| {
-                ALLOCATION_GRANULARITY as SIZE_T
-            })));
+            assert!(dwNumberOfBytesToMap.is_multiple_of(ALLOCATION_GRANULARITY as SIZE_T));
         }
 
         pub unsafe fn UnmapViewOfFile(lpBaseAddress: LPCVOID) -> BOOL {

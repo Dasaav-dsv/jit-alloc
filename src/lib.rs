@@ -120,7 +120,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         let rx_addr = self.nodes[first_fit_index].unwrap_free().shard_rx_addr;
         let shard = self
             .shards_by_rx
-            .get_mut(&rx_addr)
+            .get_mut(rx_addr)
             .expect("node is not owned?");
 
         let (size, offset) =
