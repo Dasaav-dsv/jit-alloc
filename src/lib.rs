@@ -23,7 +23,7 @@ use crate::{
     num::{Unsigned, nonmax::NonMax, positive::Positive},
 };
 
-pub(crate) mod arch;
+mod arch;
 pub mod error;
 mod freelist;
 mod node;
