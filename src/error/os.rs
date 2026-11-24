@@ -1,3 +1,5 @@
+#![cfg_attr(miri, allow(unused))]
+
 use core::{fmt, mem, num::NonZero, slice};
 
 use alloc::{borrow::Cow, string::ToString, vec::Vec};

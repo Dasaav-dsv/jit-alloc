@@ -1,4 +1,4 @@
-#![cfg(all(any(test, windows), not(miri)))]
+#![cfg(any(test, all(windows, not(miri))))]
 #![allow(clippy::unnecessary_cast, clippy::useless_conversion)]
 
 use core::{mem, num::NonZero};

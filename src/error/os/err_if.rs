@@ -1,17 +1,18 @@
-#![cfg(not(miri))]
-#![allow(unused)]
 
 pub struct Specialize<T>(pub T);
 
 pub trait ViaPointer {
+    #[allow(unused)]
     fn as_debug(&self) -> impl fmt::Debug;
 }
 
 pub trait ViaDebug {
+    #[allow(unused)]
     fn as_debug(&self) -> impl fmt::Debug;
 }
 
 pub trait ViaType {
+    #[allow(unused)]
     fn as_debug(&self) -> impl fmt::Debug;
 }
 
