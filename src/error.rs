@@ -1,3 +1,5 @@
+#![cfg_attr(miri, allow(unused))]
+
 use core::num::NonZero;
 
 use thiserror::Error;
