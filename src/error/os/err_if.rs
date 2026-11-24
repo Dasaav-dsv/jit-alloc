@@ -45,7 +45,7 @@ macro_rules! os_err_if {
         use $crate::error::os::err_if::{Specialize, ViaPointer as _, ViaDebug as _, ViaType as _};
         let res = $path0$(::$path)*($($params,)*);
         if res $($cond)+ {
-            let code = $crate::arch::last_os_error();
+            let code = last_os_error();
             cfg_select! {
                 debug_assertions => Err($crate::error::OsError::new(
                     code,

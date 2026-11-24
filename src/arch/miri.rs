@@ -1,6 +1,6 @@
 #![cfg(miri)]
 
-use core::{alloc::Layout, num::NonZero};
+use core::alloc::Layout;
 
 use crate::error::OsResult;
 

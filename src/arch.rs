@@ -7,12 +7,8 @@ mod windows;
 use crate::error::OsResult;
 
 #[cfg(all(unix, not(miri)))]
-pub use crate::arch::unix::last_os_error;
-#[cfg(all(unix, not(miri)))]
 use crate::arch::unix::{BackingFdProvider, granularity, map_rx_rw, unmap_rw_rx};
 
-#[cfg(all(windows, not(miri)))]
-pub use crate::arch::windows::last_os_error;
 #[cfg(all(windows, not(miri)))]
 use crate::arch::windows::{granularity, map_rx_rw, unmap_rw_rx};
 
