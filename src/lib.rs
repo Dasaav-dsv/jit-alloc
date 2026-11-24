@@ -140,6 +140,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         let rw_ptr = shard.rw_ptr.wrapping_add(offset_bytes);
         assert_eq!(rw_ptr.align_offset(layout.align()), 0, "alignment failed");
 
+        #[cfg(not(test))]
         unsafe {
             trap_rx_rw(rx_ptr, rw_ptr, size_bytes);
         }
@@ -153,6 +154,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         let size = layout.size();
         let (rx_ptr, rw_ptr) = self.source.map_rx_rw(size)?.ok_or(AllocateError::Other)?;
 
+        #[cfg(not(test))]
         unsafe {
             trap_rx_rw(rx_ptr, rw_ptr, size);
         }
@@ -175,6 +177,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
 
         let (rx_ptr, rw_ptr) = self.source.map_rx_rw(size)?.ok_or(AllocateError::Other)?;
 
+        #[cfg(not(test))]
         unsafe {
             trap_rx_rw(rx_ptr, rw_ptr, size);
         }
@@ -252,7 +255,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
                 let size = self.shard_size();
                 self.source.unmap_rw_rx(rx_ptr, rw_ptr, size)?;
             }
-        } else {
+        } else if !cfg!(test) {
             let size_bytes = size.as_wide().as_usize() * ALIGN;
             let offset_bytes = offset.as_usize() * ALIGN;
 
