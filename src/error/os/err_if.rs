@@ -1,4 +1,3 @@
-
 pub struct Specialize<T>(pub T);
 
 pub trait ViaPointer {

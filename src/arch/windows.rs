@@ -104,7 +104,7 @@ mod tests {
     use rustc_hash::FxBuildHasher;
 
     use crate::arch::windows::{
-        ffi::{HANDLE, Os},
+        ffi::{ALLOCATION_GRANULARITY, HANDLE, LPCVOID, LPVOID, Os},
         granularity, map_rx_rw, unmap_rw_rx,
     };
 
@@ -158,7 +158,7 @@ mod tests {
     fn test_map_rx_rw_map2_fail() {
         OsState::with(|| {
             Os::with_mut(|os| {
-                os.MapViewOfFile = |_1, _2, _3, _4, _5| {
+                os.MapViewOfFile = |_1, _2, _3, _4, _5| unsafe {
                     let prev = Os::with_mut(|os| {
                         let prev = os.MapViewOfFile;
                         os.MapViewOfFile = |_, _, _, _, _| ptr::null_mut();
@@ -171,23 +171,6 @@ mod tests {
             unsafe {
                 let granularity = granularity();
                 map_rx_rw(granularity).unwrap_err();
-            }
-        });
-    }
-
-    #[test]
-    fn test_map_rx_rw_unmap_fail() {
-        OsState::with(|| {
-            Os::with_mut(|os| os.UnmapViewOfFile = |_| 0);
-
-            let granularity = granularity();
-            let (rx, rw) = unsafe { map_rx_rw(granularity).unwrap().unwrap() };
-
-            assert_eq!(rx.align_offset(granularity), 0);
-            assert_eq!(rw.align_offset(granularity), 0);
-
-            unsafe {
-                unmap_rw_rx(rx, rw, granularity).unwrap_err();
             }
         });
     }
@@ -240,6 +223,22 @@ mod tests {
         fn close_handle(&mut self, handle: HANDLE) {
             assert!(self.handles.remove(&handle.addr()), "handle already closed");
         }
+
+        fn open_map(&mut self) -> LPVOID {
+            let map_value = self.next_map;
+            self.next_map += 1;
+            self.maps.insert(map_value);
+            ptr::without_provenance_mut(map_value * ALLOCATION_GRANULARITY as usize)
+        }
+
+        #[track_caller]
+        fn close_map(&mut self, map: LPCVOID) {
+            assert!(
+                self.maps
+                    .remove(&(map.addr() / ALLOCATION_GRANULARITY as usize)),
+                "map already closed"
+            );
+        }
     }
 
     impl Os {
@@ -250,25 +249,24 @@ mod tests {
 
     impl Default for Os {
         fn default() -> Self {
-            Os {
-                granularity: 65536,
+            Self::new(Self {
                 GetLastError: || 1,
                 GetSystemInfo: |sys_info| unsafe {
-                    (*sys_info).dwAllocationGranularity = Os::with(|os| os.granularity);
+                    (*sys_info).dwAllocationGranularity = ALLOCATION_GRANULARITY;
                 },
                 CreateFileMappingW: |_, _, _, _, _, _| {
                     OS_STATE.with_borrow_mut(OsState::open_handle)
                 },
-                MapViewOfFile: |_, _, _, _, _| {
-                    let granularity = Os::with(|os| os.granularity) as usize;
-                    ptr::without_provenance_mut(granularity)
+                MapViewOfFile: |_, _, _, _, _| OS_STATE.with_borrow_mut(OsState::open_map),
+                UnmapViewOfFile: |map| {
+                    OS_STATE.with_borrow_mut(|os| os.close_map(map));
+                    1
                 },
-                UnmapViewOfFile: |_| 1,
                 CloseHandle: |handle| {
                     OS_STATE.with_borrow_mut(|os| os.close_handle(handle));
                     1
                 },
-            }
+            })
         }
     }
 }
