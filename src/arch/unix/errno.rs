@@ -28,6 +28,7 @@
 
 use core::ffi::c_int;
 
+#[cfg(unix)]
 unsafe extern "C" {
     #[cfg_attr(
         any(
@@ -68,4 +69,10 @@ unsafe extern "C" {
     #[cfg_attr(target_os = "haiku", link_name = "_errnop")]
     #[cfg_attr(target_os = "aix", link_name = "_Errno")]
     pub unsafe fn __errno_location() -> *mut c_int;
+}
+
+#[cfg(not(unix))]
+pub unsafe fn __errno_location() -> *mut c_int {
+    static mut DUMMY: c_int = 0;
+    &raw mut DUMMY
 }
