@@ -207,6 +207,7 @@ impl BackingFdProvider {
     ///
     /// Other code must not modify the underlying file or use this fd. All memory mapped file
     /// dangers and caveats apply.
+    #[cfg(unix)]
     pub unsafe fn new_with_fd(fd: c_int) -> OsResult<Self> {
         let fd = unsafe { BackingFd::with_user_fd(fd)? };
         Ok(Self {
@@ -277,6 +278,7 @@ impl BackingFdProvider {
 }
 
 impl BackingFd {
+    #[cfg(unix)]
     pub unsafe fn with_user_fd(fd: c_int) -> OsResult<Self> {
         let fd = unsafe { os_err_if!(dup(fd) == -1).chain(os_err_if!(close(fd) == -1))? };
         let size = granularity();
@@ -616,19 +618,19 @@ mod tests {
 
     #[test]
     fn test_map_rx_rw() {
-        do_test_map_rx_rw(|| ());
+        do_map_rx_rw(|| ());
     }
 
     #[test]
     fn test_map_rx_rw_no_memfd() {
-        do_test_map_rx_rw(|| {
+        do_map_rx_rw(|| {
             Os::with_mut(|os| os.syscall = |_, _, _| -1);
         });
     }
 
     #[test]
     fn test_map_rx_rw_no_asharedmem() {
-        do_test_map_rx_rw(|| {
+        do_map_rx_rw(|| {
             Os::with_mut(|os| {
                 os.syscall = |_, _, _| -1;
                 os.ASharedMemory_create = |_, _| -1;
@@ -638,7 +640,7 @@ mod tests {
 
     #[test]
     fn test_map_rx_rw_no_shm_open() {
-        do_test_map_rx_rw(|| {
+        do_map_rx_rw(|| {
             Os::with_mut(|os| {
                 os.syscall = |_, _, _| -1;
                 os.ASharedMemory_create = |_, _| -1;
@@ -647,7 +649,7 @@ mod tests {
         });
     }
 
-    fn do_test_map_rx_rw(setup: impl FnOnce()) {
+    fn do_map_rx_rw(setup: impl FnOnce()) {
         OsState::with(|| {
             setup();
 
@@ -663,6 +665,115 @@ mod tests {
                 unmap_rw_rx(rx, rw, granularity).unwrap();
             }
         });
+    }
+
+    #[cfg(any(not(unix), miri))]
+    mod mock {
+        use crate::arch::unix::{
+            BackingFd, asharedmem_create, granularity, memfd_create, open_in_tmpdir,
+            open_o_tmpfile_in, shm_open_anon, shm_open_named, tests::OsState, tmpdir,
+            tmpfile_fileno,
+        };
+
+        #[test]
+        fn test_memfd_create() {
+            OsState::with(|| {
+                let size = granularity();
+                let fd = memfd_create().unwrap();
+                let _backing_fd =
+                    BackingFd::try_map_resize(size, fd, |fd| BackingFd::FixedSize { fd }).unwrap();
+            });
+        }
+
+        #[test]
+        fn test_asharedmem_create() {
+            OsState::with(|| {
+                let size = granularity();
+                let fd = asharedmem_create(size).unwrap();
+                let _backing_fd =
+                    BackingFd::try_map(size, fd, |fd| BackingFd::FixedSize { fd }).unwrap();
+            });
+        }
+
+        #[test]
+        fn test_shm_open_anon() {
+            OsState::with(|| {
+                let size = granularity();
+                let fd = shm_open_anon().unwrap();
+                let _backing_fd =
+                    BackingFd::try_map_resize(size, fd, |fd| BackingFd::FixedSize { fd }).unwrap();
+            });
+        }
+
+        #[test]
+        fn test_map_anon() {
+            OsState::with(|| {
+                let size = granularity();
+                let _backing_fd = BackingFd::try_map_anon(size);
+            });
+        }
+
+        #[test]
+        fn test_shm_open_named() {
+            OsState::with(|| {
+                let size = granularity();
+                let fd = shm_open_named(&mut 1).unwrap();
+                let _backing_fd =
+                    BackingFd::try_map_resize(size, fd, |fd| BackingFd::FixedSize { fd }).unwrap();
+            });
+        }
+
+        #[test]
+        fn test_tmpfile_fileno() {
+            OsState::with(|| {
+                let size = granularity();
+                let fd = tmpfile_fileno().unwrap();
+                let _backing_fd = BackingFd::try_map_resize(size, fd, |fd| BackingFd::Resizable {
+                    fd,
+                    offset: 0,
+                })
+                .unwrap();
+            });
+        }
+
+        #[test]
+        fn test_tmpfile_in_cwd() {
+            OsState::with(|| {
+                let size = granularity();
+                let fd = open_o_tmpfile_in(c"./").unwrap();
+                let _backing_fd = BackingFd::try_map_resize(size, fd, |fd| BackingFd::Resizable {
+                    fd,
+                    offset: 0,
+                })
+                .unwrap();
+            });
+        }
+
+        #[test]
+        fn test_tmpfile_in_tmpdir() {
+            OsState::with(|| {
+                let size = granularity();
+                let fd = open_o_tmpfile_in(tmpdir()).unwrap();
+                let _backing_fd = BackingFd::try_map_resize(size, fd, |fd| BackingFd::Resizable {
+                    fd,
+                    offset: 0,
+                })
+                .unwrap();
+            });
+        }
+
+        #[test]
+        fn test_open_in_tmpdir() {
+            OsState::with(|| {
+                let size = granularity();
+                let fd = open_in_tmpdir(&mut 1).unwrap();
+                let _backing_fd = BackingFd::try_map_resize(size, fd, |fd| BackingFd::Resizable {
+                    fd,
+                    offset: 0,
+                })
+                .unwrap();
+            });
+        }
     }
 
     struct OsState {
