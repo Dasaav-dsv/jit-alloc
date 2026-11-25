@@ -37,7 +37,7 @@ impl MemmapSource {
             granularity: std::sync::LazyLock::new(granularity),
 
             #[cfg(not(feature = "std"))]
-            granularity: LazyCell::new(granularity),
+            granularity: core::cell::LazyCell::new(granularity),
         }
     }
 

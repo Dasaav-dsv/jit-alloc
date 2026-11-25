@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 extern crate std;
 
 use core::{alloc::Layout, mem, ops};

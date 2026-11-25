@@ -173,15 +173,22 @@ impl BackingFdProvider {
         #[cfg(any(not(unix), miri))]
         let strategies: &'static [OpenStrategy] = &[
             |_, size| BackingFd::try_map_resize(size, memfd_create()?, fixed),
+            #[cfg(feature = "asharedmem")]
             |_, size| BackingFd::try_map(size, asharedmem_create(size)?, fixed),
+            #[cfg(feature = "shm_open")]
             |_, size| BackingFd::try_map_resize(size, shm_open_anon()?, fixed),
             |_, size| BackingFd::try_map_anon(size),
+            #[cfg(feature = "shm_open")]
             |provider, size| {
                 BackingFd::try_map_resize(size, shm_open_named(&mut provider.random_state)?, fixed)
             },
+            #[cfg(feature = "tmp_file")]
             |_, size| BackingFd::try_map_resize(size, tmpfile_fileno()?, resizable),
+            #[cfg(feature = "tmp_file")]
             |_, size| BackingFd::try_map_resize(size, open_o_tmpfile_in(c"./")?, resizable),
+            #[cfg(feature = "tmp_file")]
             |_, size| BackingFd::try_map_resize(size, open_o_tmpfile_in(tmpdir())?, resizable),
+            #[cfg(feature = "tmp_file")]
             |provider, size| {
                 BackingFd::try_map_resize(
                     size,
@@ -443,7 +450,7 @@ impl Drop for BackingFd {
     }
 }
 
-#[cfg(any(test, target_os = "linux", target_os = "android"))]
+#[cfg(any(not(unix), miri, target_os = "linux", target_os = "android"))]
 fn memfd_create() -> OsResult<c_int> {
     unsafe {
         // N.B. the name used with `memfd_create` does not have to be unique.
@@ -455,7 +462,7 @@ fn memfd_create() -> OsResult<c_int> {
     }
 }
 
-#[cfg(all(any(test, target_os = "android"), feature = "asharedmem"))]
+#[cfg(all(any(not(unix), miri, target_os = "android"), feature = "asharedmem"))]
 fn asharedmem_create(size: size_t) -> OsResult<c_int> {
     unsafe {
         // ASharedMemory_create is documented to return -EINVAL
@@ -463,7 +470,7 @@ fn asharedmem_create(size: size_t) -> OsResult<c_int> {
     }
 }
 
-#[cfg(all(any(test, target_os = "freebsd"), feature = "shm_open"))]
+#[cfg(all(any(not(unix), miri, target_os = "freebsd"), feature = "shm_open"))]
 fn shm_open_anon() -> OsResult<c_int> {
     unsafe {
         os_err_if!(shm_open(ffi::SHM_ANON, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR) == -1)
@@ -471,7 +478,11 @@ fn shm_open_anon() -> OsResult<c_int> {
 }
 
 #[cfg(all(
-    any(test, all(not(target_vendor = "apple"), not(target_os = "android"))),
+    any(
+        not(unix),
+        miri,
+        all(not(target_vendor = "apple"), not(target_os = "android"))
+    ),
     feature = "shm_open"
 ))]
 fn shm_open_named(random_state: &mut u64) -> OsResult<c_int> {
@@ -513,7 +524,7 @@ fn tmpfile_fileno() -> OsResult<c_int> {
     }
 }
 
-#[cfg(all(any(test, target_os = "linux"), feature = "tmp_file"))]
+#[cfg(all(any(not(unix), miri, target_os = "linux"), feature = "tmp_file"))]
 fn open_o_tmpfile_in(_dir: &CStr) -> OsResult<c_int> {
     unsafe {
         os_err_if!(
@@ -669,11 +680,7 @@ mod tests {
 
     #[cfg(any(not(unix), miri))]
     mod mock {
-        use crate::arch::unix::{
-            BackingFd, asharedmem_create, granularity, memfd_create, open_in_tmpdir,
-            open_o_tmpfile_in, shm_open_anon, shm_open_named, tests::OsState, tmpdir,
-            tmpfile_fileno,
-        };
+        use crate::arch::unix::{BackingFd, granularity, memfd_create, tests::OsState};
 
         #[test]
         fn test_memfd_create() {
@@ -685,21 +692,23 @@ mod tests {
             });
         }
 
+        #[cfg(feature = "asharedmem")]
         #[test]
         fn test_asharedmem_create() {
             OsState::with(|| {
                 let size = granularity();
-                let fd = asharedmem_create(size).unwrap();
+                let fd = crate::arch::unix::asharedmem_create(size).unwrap();
                 let _backing_fd =
                     BackingFd::try_map(size, fd, |fd| BackingFd::FixedSize { fd }).unwrap();
             });
         }
 
+        #[cfg(feature = "shm_open")]
         #[test]
         fn test_shm_open_anon() {
             OsState::with(|| {
                 let size = granularity();
-                let fd = shm_open_anon().unwrap();
+                let fd = crate::arch::unix::shm_open_anon().unwrap();
                 let _backing_fd =
                     BackingFd::try_map_resize(size, fd, |fd| BackingFd::FixedSize { fd }).unwrap();
             });
@@ -713,16 +722,18 @@ mod tests {
             });
         }
 
+        #[cfg(feature = "shm_open")]
         #[test]
         fn test_shm_open_named() {
             OsState::with(|| {
                 let size = granularity();
-                let fd = shm_open_named(&mut 1).unwrap();
+                let fd = crate::arch::unix::shm_open_named(&mut 1).unwrap();
                 let _backing_fd =
                     BackingFd::try_map_resize(size, fd, |fd| BackingFd::FixedSize { fd }).unwrap();
             });
         }
 
+        #[cfg(feature = "tmp_file")]
         #[test]
         fn test_tmpfile_fileno() {
             OsState::with(|| {
@@ -736,11 +747,12 @@ mod tests {
             });
         }
 
+        #[cfg(feature = "tmp_file")]
         #[test]
         fn test_tmpfile_in_cwd() {
             OsState::with(|| {
                 let size = granularity();
-                let fd = open_o_tmpfile_in(c"./").unwrap();
+                let fd = crate::arch::unix::open_o_tmpfile_in(c"./").unwrap();
                 let _backing_fd = BackingFd::try_map_resize(size, fd, |fd| BackingFd::Resizable {
                     fd,
                     offset: 0,
@@ -749,11 +761,12 @@ mod tests {
             });
         }
 
+        #[cfg(feature = "tmp_file")]
         #[test]
         fn test_tmpfile_in_tmpdir() {
             OsState::with(|| {
                 let size = granularity();
-                let fd = open_o_tmpfile_in(tmpdir()).unwrap();
+                let fd = crate::arch::unix::open_o_tmpfile_in(crate::arch::unix::tmpdir()).unwrap();
                 let _backing_fd = BackingFd::try_map_resize(size, fd, |fd| BackingFd::Resizable {
                     fd,
                     offset: 0,
@@ -762,11 +775,12 @@ mod tests {
             });
         }
 
+        #[cfg(feature = "tmp_file")]
         #[test]
         fn test_open_in_tmpdir() {
             OsState::with(|| {
                 let size = granularity();
-                let fd = open_in_tmpdir(&mut 1).unwrap();
+                let fd = crate::arch::unix::open_in_tmpdir(&mut 1).unwrap();
                 let _backing_fd = BackingFd::try_map_resize(size, fd, |fd| BackingFd::Resizable {
                     fd,
                     offset: 0,
