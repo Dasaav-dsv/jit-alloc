@@ -738,7 +738,7 @@ mod tests {
         fn test_tmpfile_fileno() {
             OsState::with(|| {
                 let size = granularity();
-                let fd = tmpfile_fileno().unwrap();
+                let fd = crate::arch::unix::tmpfile_fileno().unwrap();
                 let _backing_fd = BackingFd::try_map_resize(size, fd, |fd| BackingFd::Resizable {
                     fd,
                     offset: 0,
