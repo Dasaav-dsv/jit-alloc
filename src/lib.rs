@@ -5,7 +5,7 @@ extern crate alloc;
 #[cfg(any(test, feature = "std"))]
 extern crate std;
 
-use core::{alloc::Layout, mem, ops};
+use core::{alloc::Layout, ops};
 
 use alloc::collections::BTreeMap;
 use hashbrown::HashMap;
@@ -41,26 +41,38 @@ type AlignedSize<S> = Positive<S>;
 type AlignedOffset<S> = S;
 
 type NodeIndex = NonMax<u32>;
+type ShardIndex = NonMax<u32>;
 
 #[derive(Debug)]
 pub struct JitAlloc<S: SizeType = u16, const ALIGN: usize = 1> {
     source: MemmapSource,
-    shards_by_rx: BTreeMap<Addr, Shard<S>>,
-    nodes: NodeList<S, ALIGN>,
+
+    shards_by_rx: BTreeMap<Addr, ShardIndex>,
+    large_shards_by_rx: HashMap<Addr, LargeShard, FxBuildHasher>,
+
+    nodes: AllocList<S, ALIGN>,
 }
 
 #[derive(Debug)]
-struct NodeList<S: SizeType, const ALIGN: usize> {
+struct AllocList<S: SizeType, const ALIGN: usize> {
     freelist: Freelist<S>,
+    shards: Slab<Shard<S>>,
     nodes: Slab<Node<S>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Shard<S: SizeType> {
     rx_ptr: *const u8,
     rw_ptr: *mut u8,
     size: usize,
     allocated: HashMap<AlignedOffset<S>, NodeIndex, FxBuildHasher>,
+}
+
+#[derive(Debug)]
+struct LargeShard {
+    rx_ptr: *const u8,
+    rw_ptr: *mut u8,
+    size: usize,
 }
 
 impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
@@ -78,7 +90,8 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         Self {
             source: MemmapSource::new(),
             shards_by_rx: BTreeMap::new(),
-            nodes: NodeList::new(),
+            large_shards_by_rx: HashMap::with_hasher(FxBuildHasher),
+            nodes: AllocList::new(),
         }
     }
 
@@ -97,7 +110,8 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         Ok(Self {
             source,
             shards_by_rx: BTreeMap::new(),
-            nodes: NodeList::new(),
+            large_shards_by_rx: HashMap::with_hasher(FxBuildHasher),
+            nodes: AllocList::new(),
         })
     }
 
@@ -117,15 +131,13 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
             None => self.allocate_shard()?,
         };
 
-        let rx_addr = self.nodes[first_fit_index].unwrap_free().shard_rx_addr;
-        let shard = self
-            .shards_by_rx
-            .get_mut(rx_addr)
-            .expect("node is not owned?");
+        let shard_index = *self.nodes[first_fit_index].unwrap_free().shard_index;
 
         let (size, offset) =
             self.nodes
-                .allocate_in_node(shard, first_fit_index, size, layout.align())?;
+                .allocate_in_node(shard_index, first_fit_index, size, layout.align())?;
+
+        let shard = self.nodes.shard(shard_index);
 
         let size_bytes = size.as_wide().as_usize() * ALIGN;
         assert!(size_bytes >= layout.size(), "size too small");
@@ -157,13 +169,12 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
             trap_rx_rw(rx_ptr, rw_ptr, size);
         }
 
-        self.shards_by_rx.insert(
+        self.large_shards_by_rx.insert(
             rx_ptr.addr(),
-            Shard {
+            LargeShard {
                 rx_ptr,
                 rw_ptr,
                 size,
-                allocated: HashMap::with_hasher(FxBuildHasher),
             },
         );
 
@@ -180,15 +191,20 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
             trap_rx_rw(rx_ptr, rw_ptr, size);
         }
 
-        let mut shard = Shard {
-            rx_ptr,
-            rw_ptr,
-            allocated: HashMap::with_hasher(FxBuildHasher),
-            size,
-        };
+        let shard_index = self
+            .nodes
+            .shards
+            .insert(Shard {
+                rx_ptr,
+                rw_ptr,
+                allocated: HashMap::with_hasher(FxBuildHasher),
+                size,
+            })
+            .try_into()
+            .expect("too many shards");
 
         let node_index = match self.nodes.allocate_in_shard(
-            &mut shard,
+            shard_index,
             AlignedSize::MAX,
             AlignedOffset::ZERO,
             None,
@@ -201,7 +217,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
             },
         };
 
-        self.shards_by_rx.insert(rx_ptr.addr(), shard);
+        self.shards_by_rx.insert(rx_ptr.addr(), shard_index);
 
         Ok(node_index)
     }
@@ -234,19 +250,32 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
 
         let rx_addr = rx_ptr.addr();
 
-        let (&shard_addr, shard) = self
+        let (&shard_addr, &shard_index) = self
             .shards_by_rx
-            .range_mut(..=rx_addr)
+            .range(..=rx_addr)
             .next_back()
             .ok_or(DeallocateError::InvalidParameter)?;
 
         let offset = AlignedOffset::<S>::try_from((rx_addr - shard_addr) / ALIGN)
             .map_err(|_| DeallocateError::InvalidParameter)?;
 
-        if let Some(last_index) = self.nodes.deallocate_in_shard(shard, size, offset)? {
+        let node_index = *self
+            .nodes
+            .shard(shard_index)
+            .allocated
+            .get(&offset)
+            .ok_or(DeallocateError::InvalidParameter)?;
+
+        let node = self.nodes[node_index].unwrap_allocated();
+
+        if *node.allocated_offset != offset || *node.allocated_size != size {
+            return Err(DeallocateError::DoubleFree);
+        }
+
+        if let Some(last_index) = self.nodes.deallocate_in_shard(shard_index, node_index)? {
             self.nodes.nodes.remove(last_index.get() as usize);
 
-            let Shard { rx_ptr, rw_ptr, .. } = *shard;
+            let Shard { rx_ptr, rw_ptr, .. } = *self.nodes.shard(shard_index);
             self.shards_by_rx.remove(&shard_addr);
 
             unsafe {
@@ -257,7 +286,11 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
             let size_bytes = size.as_wide().as_usize() * ALIGN;
             let offset_bytes = offset.as_usize() * ALIGN;
 
-            let rw_ptr = shard.rw_ptr.wrapping_add(offset_bytes);
+            let rw_ptr = self
+                .nodes
+                .shard(shard_index)
+                .rw_ptr
+                .wrapping_add(offset_bytes);
 
             unsafe {
                 trap_rx_rw(rx_ptr, rw_ptr, size_bytes);
@@ -275,16 +308,15 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         let layout = self.pad_layout_large(layout)?;
 
         let shard = self
-            .shards_by_rx
+            .large_shards_by_rx
             .get(&rx_ptr.addr())
-            .ok_or(DeallocateError::InvalidParameter)?
-            .clone();
+            .ok_or(DeallocateError::InvalidParameter)?;
 
         if shard.size != layout.size() {
             return Err(DeallocateError::InvalidParameter);
         }
 
-        self.shards_by_rx.remove(&rx_ptr.addr());
+        let shard = self.large_shards_by_rx.remove(&rx_ptr.addr()).unwrap();
 
         unsafe {
             self.source
@@ -360,7 +392,13 @@ impl<S: SizeType, const ALIGN: usize> Default for JitAlloc<S, ALIGN> {
 impl<S: SizeType, const ALIGN: usize> Drop for JitAlloc<S, ALIGN> {
     fn drop(&mut self) {
         unsafe {
-            for shard in mem::take(&mut self.shards_by_rx).into_values() {
+            for shard in self.nodes.shards.drain() {
+                let _ = self
+                    .source
+                    .unmap_rw_rx(shard.rx_ptr, shard.rw_ptr, shard.size);
+            }
+
+            for (_, shard) in self.large_shards_by_rx.drain() {
                 let _ = self
                     .source
                     .unmap_rw_rx(shard.rx_ptr, shard.rw_ptr, shard.size);
@@ -369,17 +407,18 @@ impl<S: SizeType, const ALIGN: usize> Drop for JitAlloc<S, ALIGN> {
     }
 }
 
-impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
+impl<S: SizeType, const ALIGN: usize> AllocList<S, ALIGN> {
     const fn new() -> Self {
         Self {
             freelist: Freelist::new(),
+            shards: Slab::new(),
             nodes: Slab::new(),
         }
     }
 
     fn allocate_in_node(
         &mut self,
-        shard: &mut Shard<S>,
+        shard_index: ShardIndex,
         node_index: NodeIndex,
         size: AlignedSize<S>,
         align: usize,
@@ -387,6 +426,8 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
         let mut node = self[node_index].clone();
 
         let mut original = (node.size(), node_index);
+
+        let shard = self.shard(shard_index);
 
         let offset_bytes = node.offset().as_usize() * ALIGN;
 
@@ -416,7 +457,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             );
 
             self.allocate_in_shard(
-                shard,
+                shard_index,
                 prev_size,
                 node.offset(),
                 Some(node_index),
@@ -445,7 +486,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
                 );
             } else {
                 self.allocate_in_shard(
-                    shard,
+                    shard_index,
                     next_size,
                     next_offset,
                     node.next(),
@@ -456,7 +497,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
         self.remove_from_freelist(original);
 
-        shard
+        self.shard_mut(shard_index)
             .allocated
             .try_insert(node.offset(), node_index)
             .expect("can't overwrite another node");
@@ -469,14 +510,14 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
     fn allocate_in_shard(
         &mut self,
-        shard: &mut Shard<S>,
+        shard_index: ShardIndex,
         size: AlignedSize<S>,
         offset: AlignedOffset<S>,
         next: Option<NodeIndex>,
         prev: Option<NodeIndex>,
     ) -> Result<NodeIndex, AllocateError> {
         let key = self.nodes.insert(Node::Free {
-            shard_rx_addr: shard.rx_ptr.addr(),
+            shard_index,
             next_free: None,
             prev_free: None,
             next,
@@ -512,20 +553,11 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
 
     fn deallocate_in_shard(
         &mut self,
-        shard: &mut Shard<S>,
-        size: AlignedSize<S>,
-        offset: AlignedOffset<S>,
+        shard_index: ShardIndex,
+        node_index: NodeIndex,
     ) -> Result<Option<NodeIndex>, DeallocateError> {
-        let node_index = *shard
-            .allocated
-            .get(&offset)
-            .ok_or(DeallocateError::InvalidParameter)?;
-
         let node = self[node_index].unwrap_allocated();
-
-        if *node.allocated_offset != offset || *node.allocated_size != size {
-            return Err(DeallocateError::DoubleFree);
-        }
+        let allocated_offset = *node.allocated_offset;
 
         if let Some(merge_size) = node.size.checked_sub(AlignedSize::MIN) {
             let merge_offset = node
@@ -540,14 +572,22 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
                     Some(merge_offset),
                 );
             } else {
-                self.allocate_in_shard(shard, merge_size, merge_offset, None, Some(node_index))
-                    .map_err(|_| DeallocateError::Other)?;
+                self.allocate_in_shard(
+                    shard_index,
+                    merge_size,
+                    merge_offset,
+                    None,
+                    Some(node_index),
+                )
+                .map_err(|_| DeallocateError::Other)?;
             }
         }
 
-        shard.allocated.remove(&offset);
+        self.shard_mut(shard_index)
+            .allocated
+            .remove(&allocated_offset);
 
-        let node = self[node_index].make_free(None, None, shard.rx_ptr.addr());
+        let node = self[node_index].make_free(None, None, shard_index);
         *node.size = AlignedSize::MIN;
 
         if let Some(prev_index) = *node.prev {
@@ -575,7 +615,7 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             Ok(None)
         } else {
             // `prev` and `next` are None, this is the last node.
-            assert!(shard.allocated.is_empty(), "broken link");
+            assert!(self.shard(shard_index).allocated.is_empty(), "broken link");
             Ok(Some(node_index))
         }
     }
@@ -684,9 +724,17 @@ impl<S: SizeType, const ALIGN: usize> NodeList<S, ALIGN> {
             .get2_mut(node1.get() as usize, node2.get() as usize)
             .expect("Slab indices are unique and don't dangle")
     }
+
+    fn shard(&self, shard_index: ShardIndex) -> &Shard<S> {
+        &self.shards[shard_index.get() as usize]
+    }
+
+    fn shard_mut(&mut self, shard_index: ShardIndex) -> &mut Shard<S> {
+        &mut self.shards[shard_index.get() as usize]
+    }
 }
 
-impl<S: SizeType, const ALIGN: usize> ops::Index<NodeIndex> for NodeList<S, ALIGN> {
+impl<S: SizeType, const ALIGN: usize> ops::Index<NodeIndex> for AllocList<S, ALIGN> {
     type Output = Node<S>;
 
     fn index(&self, index: NodeIndex) -> &Self::Output {
@@ -694,7 +742,7 @@ impl<S: SizeType, const ALIGN: usize> ops::Index<NodeIndex> for NodeList<S, ALIG
     }
 }
 
-impl<S: SizeType, const ALIGN: usize> ops::IndexMut<NodeIndex> for NodeList<S, ALIGN> {
+impl<S: SizeType, const ALIGN: usize> ops::IndexMut<NodeIndex> for AllocList<S, ALIGN> {
     fn index_mut(&mut self, index: NodeIndex) -> &mut Self::Output {
         &mut self.nodes[index.get() as usize]
     }

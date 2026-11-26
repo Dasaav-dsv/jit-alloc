@@ -1,4 +1,4 @@
-use crate::{AlignedOffset, AlignedSize, NodeIndex, SizeType};
+use crate::{AlignedOffset, AlignedSize, NodeIndex, ShardIndex, SizeType};
 
 #[derive(Clone, Debug)]
 pub enum Node<S: SizeType> {
@@ -13,7 +13,7 @@ pub enum Node<S: SizeType> {
 
         prev_free: Option<NodeIndex>,
 
-        shard_rx_addr: usize,
+        shard_index: ShardIndex,
     },
     Allocated {
         size: AlignedSize<S>,
@@ -35,7 +35,7 @@ pub struct FreeNode<'a, S: SizeType> {
     pub next: &'a mut Option<NodeIndex>,
     pub prev: &'a mut Option<NodeIndex>,
     pub prev_free: &'a mut Option<NodeIndex>,
-    pub shard_rx_addr: &'a mut usize,
+    pub shard_index: &'a mut ShardIndex,
 }
 
 #[allow(unused)]
@@ -58,7 +58,7 @@ impl<S: SizeType> Node<S> {
             next,
             prev,
             prev_free,
-            shard_rx_addr,
+            shard_index: shard,
         } = self
         else {
             panic!("node is allocated");
@@ -71,7 +71,7 @@ impl<S: SizeType> Node<S> {
             next,
             prev,
             prev_free,
-            shard_rx_addr,
+            shard_index: shard,
         }
     }
 
@@ -104,7 +104,7 @@ impl<S: SizeType> Node<S> {
         &mut self,
         next_free: Option<NodeIndex>,
         prev_free: Option<NodeIndex>,
-        shard_rx_addr: usize,
+        shard: ShardIndex,
     ) -> FreeNode<'_, S> {
         *self = Self::Free {
             size: self.size(),
@@ -113,7 +113,7 @@ impl<S: SizeType> Node<S> {
             next: self.next(),
             prev: self.prev(),
             prev_free,
-            shard_rx_addr,
+            shard_index: shard,
         };
 
         self.unwrap_free()
