@@ -28,6 +28,19 @@ impl<S: SizeType> Freelist<S> {
         }
     }
 
+    pub fn try_insert(&mut self, node: Node<S>) -> Result<(), &mut Node<S>> {
+        let index = self.nodes.partition_point(|(size, _)| *size < node.0);
+
+        if let Some((size, _)) = self.nodes.get(index)
+            && *size == node.0
+        {
+            Err(&mut self.nodes[index])
+        } else {
+            self.nodes.insert(index, (node.0, node.1));
+            Ok(())
+        }
+    }
+
     pub fn remove(&mut self, node: Node<S>) -> Option<Node<S>> {
         let index = self
             .nodes

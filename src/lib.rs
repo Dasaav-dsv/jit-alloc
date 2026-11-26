@@ -623,25 +623,25 @@ impl<S: SizeType, const ALIGN: usize> AllocList<S, ALIGN> {
     fn insert_into_freelist(&mut self, (size, node_index): (AlignedSize<S>, NodeIndex)) {
         let _free = self[node_index].unwrap_free();
 
-        let Some((_, p_index)) = self.freelist.insert((size, node_index)) else {
+        let Err(&mut (_, n_index)) = self.freelist.try_insert((size, node_index)) else {
             return;
         };
 
-        let (node, prev) = self.get2_mut(node_index, p_index);
+        let (node, next) = self.get2_mut(node_index, n_index);
         let node = node.unwrap_free();
-        let prev = prev.unwrap_free();
+        let next = next.unwrap_free();
 
-        let pn_index = *prev.next_free;
-        let pp_index = *prev.prev_free;
+        let nn_index = *next.next_free;
+        let np_index = *next.prev_free;
 
-        *node.next_free = Some(pn_index.unwrap_or(p_index));
-        *node.prev_free = Some(p_index);
+        *node.next_free = Some(n_index);
+        *node.prev_free = Some(np_index.unwrap_or(n_index));
 
-        *prev.next_free = Some(node_index);
-        *prev.prev_free = Some(pp_index.unwrap_or(node_index));
+        *next.next_free = Some(nn_index.unwrap_or(node_index));
+        *next.prev_free = Some(node_index);
 
-        if let Some(pn_index) = pn_index {
-            *self[pn_index].unwrap_free().prev_free = Some(node_index);
+        if let Some(np_index) = np_index {
+            *self[np_index].unwrap_free().next_free = Some(node_index);
         }
     }
 
