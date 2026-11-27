@@ -6,11 +6,9 @@ use crate::num::Unsigned;
 #[repr(transparent)]
 pub struct Positive<T: Unsigned>(T);
 
+#[allow(unused)]
 impl<T: Unsigned> Positive<T> {
-    #[allow(unused)]
     pub const MIN: Self = Self(T::ZERO);
-
-    #[allow(unused)]
     pub const MAX: Self = Self(T::MAX);
 
     pub fn new(value: T::Wide) -> Option<Self> {

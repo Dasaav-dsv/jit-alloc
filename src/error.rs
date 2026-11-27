@@ -1,3 +1,5 @@
+//! Error types for allocation and deallocation.
+
 #![cfg_attr(miri, allow(unused))]
 
 use core::num::NonZero;
@@ -8,55 +10,81 @@ use crate::error::os::OsErrorInner;
 
 pub(crate) mod os;
 
-pub type OsResult<T> = Result<T, OsError>;
+pub(crate) type OsResult<T> = Result<T, OsError>;
 
+/// An operating system error encountered managing executable memory.
 #[derive(Error, Debug)]
 #[error(transparent)]
 pub struct OsError {
     inner: OsErrorInner,
 }
 
+/// An allocator error for unsupported layouts.
+///
+/// Alignment greater than the OS page allocation granularity (as returned by
+/// [`page_granularity`](crate::JitAlloc::page_granularity)) are not supported because of
+/// the difficulty aligning allocations in a double rx-rw memory mapping.
 #[derive(Error, Debug)]
 pub enum LayoutError {
+    /// Invalid layout (Rust standard library [`LayoutError`]).
     #[error("layout is invalid ({0})")]
     SizeAlign(#[from] alloc::alloc::LayoutError),
 
+    /// Unsupported layout size.
     #[error("layout is too big ({0})")]
     Size(usize),
 
+    /// Unsupported layout alignment (see [`LayoutError`] top level explanation).
     #[error("alignment ({align}) exceeds supported maximum ({max_align})")]
-    Overaligned { align: usize, max_align: usize },
+    Overaligned {
+        /// The requested alignment.
+        align: usize,
+
+        /// The greatest possible alignment.
+        max_align: usize,
+    },
 }
 
+/// Errors returned by [`allocate`](crate::JitAlloc::allocate).
 #[derive(Error, Debug)]
 pub enum AllocateError {
+    /// Unsupported layout (see [`LayoutError`]).
     #[error(transparent)]
     Layout(#[from] LayoutError),
 
+    /// Failed to allocate executable memory by the OS.
     #[error(transparent)]
     Os(#[from] OsError),
 
-    #[error("could not allocate memory")]
-    Other,
-
+    /// This allocator can't allocate any more memory.
     #[error("allocator is at maximum capacity")]
     Capacity,
+
+    /// Other (uncommon) errors.
+    #[error("could not allocate memory")]
+    Other,
 }
 
+/// Errors returned by [`deallocate`](crate::JitAlloc::deallocate).
 #[derive(Error, Debug)]
 pub enum DeallocateError {
+    /// Unsupported layout (see [`LayoutError`]).
     #[error(transparent)]
     Layout(#[from] LayoutError),
 
+    /// Attempted to deallocate memory more than once or with a different layout.
     #[error("not a valid allocation")]
     InvalidParameter,
 
+    /// Attempted to deallocate memory more than once.
     #[error("tried to deallocate a previously freed block")]
     DoubleFree,
 
+    /// Failed to free executable memory by the OS.
     #[error(transparent)]
     Os(#[from] OsError),
 
+    /// Other (uncommon) errors.
     #[error("could not deallocate memory")]
     Other,
 }

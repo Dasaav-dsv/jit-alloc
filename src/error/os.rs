@@ -7,7 +7,7 @@ use thiserror::Error;
 
 pub(crate) mod err_if;
 
-#[derive(Error, Debug)]
+#[derive(Error)]
 pub enum OsErrorInner {
     Single(#[from] OsErrorSource),
     Multiple(Vec<OsErrorSource>),
@@ -81,6 +81,12 @@ impl OsErrorInner {
         sources.push(source);
 
         sources
+    }
+}
+
+impl fmt::Debug for OsErrorInner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self, f)
     }
 }
 

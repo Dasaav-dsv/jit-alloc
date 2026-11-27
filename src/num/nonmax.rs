@@ -21,11 +21,9 @@ pub trait HasZero: Unsigned + From<Self::NonZero> {
         + TryFrom<NonZero<usize>>;
 }
 
+#[allow(unused)]
 impl<T: HasZero> NonMax<T> {
-    #[allow(unused)]
     pub const ZERO: Self = Self(<T as HasZero>::NZ_ONE);
-
-    #[allow(unused)]
     pub const MAX: Self = Self(<T as HasZero>::NZ_MAX);
 
     pub fn new(value: T) -> Option<Self> {

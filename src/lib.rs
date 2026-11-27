@@ -1,4 +1,6 @@
+#![doc = include_str!("../README.md")]
 #![no_std]
+#![warn(missing_docs)]
 
 extern crate alloc;
 
@@ -25,11 +27,21 @@ use crate::{
 
 mod arch;
 pub mod error;
-pub mod report;
 mod freelist;
 mod node;
-pub mod num;
+mod num;
+pub mod report;
 
+/// Allows using an unsigned integer type with [`JitAlloc`].
+///
+/// Based on whether a `u8` or `u16` size type is used the allocator overhead may vary.
+///
+/// The size of a single allocator "shard" (its internal allocation granularity) is
+/// `ALIGN << u8::BITS` or `ALIGN << u16::BITS` respectively.
+///
+/// Note that the minimum allocation granularity still depends on the OS page allocation
+/// granularity; using `u8` and `ALIGN=1` nets a shard size of 256 bytes, but if the page
+/// size is 4096, only 256/4096 bytes of every allocation are used.
 pub trait SizeType: Unsigned {}
 
 impl SizeType for u8 {}
@@ -44,6 +56,9 @@ type AlignedOffset<S> = S;
 type NodeIndex = NonMax<u32>;
 type ShardIndex = NonMax<u32>;
 
+/// An executable memory allocator, the primary type of this crate.
+///
+/// TODO
 #[derive(Debug)]
 pub struct JitAlloc<S: SizeType = u16, const ALIGN: usize = 1> {
     source: MemmapSource,
@@ -77,8 +92,13 @@ struct LargeShard {
 }
 
 impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
-    pub const SHARD_SIZE: usize = (1 << S::BITS) * ALIGN;
+    /// Allocation granularity used for allocating shards to be subdivided by this allocator.
+    pub const SHARD_SIZE: usize = ALIGN << S::BITS;
+
+    /// The upper bound on allocations in shards, larger allocations their own individual shards.
     pub const LARGE_SIZE: usize = Self::SHARD_SIZE / 2;
+
+    /// The minimum alignment supported by this allocator (same as `ALIGN`).
     pub const MIN_ALIGN: usize = {
         assert!(ALIGN.is_power_of_two());
         ALIGN
@@ -86,6 +106,17 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
 }
 
 impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
+    /// Returns a new allocator instance.
+    ///
+    /// Calling this does not allocate any memory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use jit_alloc::JitAlloc;
+    ///
+    /// let alloc = JitAlloc::<u8, 16>::new();
+    /// ```
     pub const fn new() -> Self {
         let _ = Self::MIN_ALIGN;
         Self {
@@ -96,9 +127,29 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         }
     }
 
-    /// Returns an allocator that uses a user provided fd to map as executable memory.
+    /// Returns a new allocator that uses a user provided fd to map as executable memory.
+    ///
     /// The ownership of the file descriptor is passed to this function. It must be opened
     /// with at least read and write permissions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::{fs::File, os::fd::IntoRawFd};
+    ///
+    /// use jit_alloc::JitAlloc;
+    ///
+    /// let file = File::options()
+    ///     .read(true)
+    ///     .write(true)
+    ///     .create(true)
+    ///     .open("example")
+    ///     .unwrap();
+    ///
+    /// let alloc = unsafe {
+    ///     JitAlloc::<u16, 1>::new_with_source_fd(file.into_raw_fd()).unwrap()
+    /// };
+    /// ```
     ///
     /// # Safety
     ///
@@ -116,6 +167,27 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         })
     }
 
+    /// Allocates memory suitable for this [`Layout`].
+    ///
+    /// Returns two pointers, one to the read-execute memory mapping, and one to the read-write
+    /// memory mapping. The mappings may overlap.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::alloc::Layout;
+    ///
+    /// use jit_alloc::JitAlloc;
+    ///
+    /// let mut alloc = JitAlloc::<u8, 16>::new();
+    ///
+    /// let layout = Layout::new::<[u8; 128]>();
+    /// let (rx, rw) = alloc.allocate(layout).unwrap();
+    ///
+    /// unsafe {
+    ///     alloc.deallocate(rx, layout).unwrap();
+    /// }
+    /// ```
     pub fn allocate(&mut self, layout: Layout) -> Result<(*const u8, *mut u8), AllocateError> {
         if layout.pad_to_align().size() < Self::LARGE_SIZE {
             self.allocate_small(layout)
@@ -223,9 +295,34 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         Ok(node_index)
     }
 
+    /// Deallocates memory previously allocated by a call to [`allocate`](JitAlloc::allocate).
+    ///
+    /// This allocator is hardened against double frees and won't cause immediate UB, however
+    /// other code using the allocated memory is likely to make assumptions that make this
+    /// function `unsafe`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::alloc::Layout;
+    ///
+    /// use jit_alloc::JitAlloc;
+    ///
+    /// let mut alloc = JitAlloc::<u8, 16>::new();
+    ///
+    /// let layout = Layout::new::<[u8; 128]>();
+    /// let (rx, rw) = alloc.allocate(layout).unwrap();
+    ///
+    /// unsafe {
+    ///     alloc.deallocate(rx, layout).unwrap();
+    /// }
+    /// ```
+    ///
     /// # Safety
     ///
-    /// TODO
+    /// - `rx_ptr` must be the same as returned [`allocate`](JitAlloc::allocate) previously.
+    /// - `layout` must be the same as passed to [`allocate`](JitAlloc::allocate) previously.
+    /// - Each call to `deallocate` must correspond to at most one [`allocate`](JitAlloc::allocate).
     pub unsafe fn deallocate(
         &mut self,
         rx_ptr: *const u8,
@@ -240,6 +337,23 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         } else {
             self.deallocate_large(rx_ptr, layout)
         }
+    }
+
+    /// Returns the OS page allocation granularity respected by this allocator.
+    ///
+    /// It is not possible to allocate memory with alignment greater than this value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use jit_alloc::JitAlloc;
+    ///
+    /// let alloc = JitAlloc::<u16, 1>::new();
+    /// let page_granularity = alloc.page_granularity();
+    /// assert!(page_granularity.is_power_of_two())
+    /// ```
+    pub fn page_granularity(&self) -> usize {
+        self.source.granularity()
     }
 
     fn deallocate_small(
@@ -331,7 +445,7 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
         &self,
         layout: Layout,
     ) -> Result<(Layout, AlignedSize<S>, AlignedSize<S>), LayoutError> {
-        let granularity = self.source.granularity();
+        let granularity = self.page_granularity();
         let (layout, max_size) = pad_layout_to(layout, ALIGN, granularity)?;
 
         let Ok(size) = AlignedSize::<S>::try_from(layout.size().div_ceil(ALIGN)) else {
@@ -346,14 +460,14 @@ impl<S: SizeType, const ALIGN: usize> JitAlloc<S, ALIGN> {
     }
 
     fn pad_layout_large(&self, layout: Layout) -> Result<Layout, LayoutError> {
-        let granularity = self.source.granularity();
+        let granularity = self.page_granularity();
         Ok(pad_layout_to(layout, granularity, granularity)?
             .0
             .pad_to_align())
     }
 
     fn shard_size(&self) -> usize {
-        self.source.granularity().max(Self::SHARD_SIZE)
+        self.page_granularity().max(Self::SHARD_SIZE)
     }
 }
 
