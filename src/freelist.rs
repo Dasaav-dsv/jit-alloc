@@ -6,7 +6,7 @@ type Node<S> = (AlignedSize<S>, NodeIndex);
 
 #[derive(Default, Debug)]
 pub struct Freelist<S: SizeType> {
-    nodes: Vec<(AlignedSize<S>, NodeIndex)>,
+    pub(super) nodes: Vec<(AlignedSize<S>, NodeIndex)>,
 }
 
 impl<S: SizeType> Freelist<S> {

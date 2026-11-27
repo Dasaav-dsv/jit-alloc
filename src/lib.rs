@@ -25,6 +25,7 @@ use crate::{
 
 mod arch;
 pub mod error;
+pub mod report;
 mod freelist;
 mod node;
 pub mod num;
