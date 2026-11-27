@@ -82,3 +82,15 @@ impl Default for MemmapSource {
         const { Self::new() }
     }
 }
+
+/// Flush CPU's instruction cache. This is required on certain architectures for
+/// writes to executable memory to become visible.
+/// 
+/// # Safety
+/// 
+/// Currently implemented with [`clear_cache`] which is documented to be unsafe.
+pub unsafe fn clear_cache(rx_ptr: *const u8, size: usize) {
+    unsafe {
+        clear_cache::clear_cache(rx_ptr, rx_ptr.add(size));
+    }
+}

@@ -32,6 +32,8 @@ mod node;
 mod num;
 pub mod report;
 
+pub use crate::arch::{clear_cache, protect::JitWriteProtect};
+
 /// Allows using an unsigned integer type with [`JitAlloc`].
 ///
 /// Based on whether a `u8` or `u16` size type is used the allocator overhead may vary.
