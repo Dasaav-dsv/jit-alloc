@@ -623,7 +623,7 @@ impl<S: SizeType, const ALIGN: usize> AllocList<S, ALIGN> {
     fn insert_into_freelist(&mut self, (size, node_index): (AlignedSize<S>, NodeIndex)) {
         let _free = self[node_index].unwrap_free();
 
-        let Err(&mut (_, n_index)) = self.freelist.try_insert((size, node_index)) else {
+        let Err((_, n_index)) = self.freelist.try_insert((size, node_index)) else {
             return;
         };
 
