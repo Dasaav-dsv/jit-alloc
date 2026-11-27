@@ -5,6 +5,9 @@ edition = "2024"
 authors = ["Dasaav"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Dasaav-dsv/jit-alloc"
+description = "Split metadata W^X executable memory allocator"
+keywords = ["allocator", "executable", "code", "jit"]
+categories = ["memory-management", "no-std"]
 
 [dependencies]
 clear-cache = "0.1.3"
