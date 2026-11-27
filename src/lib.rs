@@ -650,11 +650,10 @@ impl<S: SizeType, const ALIGN: usize> AllocList<S, ALIGN> {
         let next_free = *node.next_free;
         let prev_free = *node.prev_free;
 
-        if let Some(_removed) = self.freelist.remove((size, node_index))
-            && let Some(prev_index) = prev_free
-        {
-            let prev_size = *self[prev_index].unwrap_free().size;
-            self.freelist.insert((prev_size, prev_index));
+        if let Some(prev_free) = prev_free {
+            self.freelist.replace((size, node_index), prev_free);
+        } else {
+            self.freelist.remove((size, node_index));
         }
 
         let node = self[node_index].unwrap_free();
