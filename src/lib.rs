@@ -761,26 +761,6 @@ mod tests {
     use crate::{JitAlloc, SizeType};
 
     #[test]
-    fn test_u8_1() {
-        test_alloc_class(JitAlloc::<u8, 1>::new(), 1..=120);
-    }
-
-    #[test]
-    fn test_u8_2() {
-        test_alloc_class(JitAlloc::<u8, 2>::new(), 1..=240);
-    }
-
-    #[test]
-    fn test_u8_4() {
-        test_alloc_class(JitAlloc::<u8, 4>::new(), 1..=480);
-    }
-
-    #[test]
-    fn test_u8_8() {
-        test_alloc_class(JitAlloc::<u8, 8>::new(), 1..=960);
-    }
-
-    #[test]
     fn test_u8_16() {
         test_alloc_class(JitAlloc::<u8, 16>::new(), 1..=1920);
     }
@@ -788,6 +768,16 @@ mod tests {
     #[test]
     fn test_u8_32() {
         test_alloc_class(JitAlloc::<u8, 32>::new(), 1..=3840);
+    }
+
+    #[test]
+    fn test_u8_64() {
+        test_alloc_class(JitAlloc::<u8, 64>::new(), 1..=7680);
+    }
+
+    #[test]
+    fn test_u8_128() {
+        test_alloc_class(JitAlloc::<u8, 128>::new(), 1..=15360);
     }
 
     #[test]
