@@ -867,6 +867,9 @@ impl<S: SizeType, const ALIGN: usize> ops::IndexMut<NodeIndex> for AllocList<S, 
 unsafe impl<S: SizeType> Send for Shard<S> {}
 unsafe impl<S: SizeType> Sync for Shard<S> {}
 
+unsafe impl Send for LargeShard {}
+unsafe impl Sync for LargeShard {}
+
 #[cfg(test)]
 mod tests {
     use core::slice;
